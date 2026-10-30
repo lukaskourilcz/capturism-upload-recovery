@@ -84,7 +84,7 @@ input('start').onclick = async () => {
   try {
     fixedRun = input('implementation').value === 'candidate';
     uploader = fixedRun ? candidate : baseline;
-    await api('/lab/start', { scenario: input('scenario').value }); started = Date.now();
+    const localRun = await api('/lab/start', { scenario: input('scenario').value }); started = Date.now();
     $('status').textContent = 'Preparing your download…'; $('detail').textContent = 'Waiting for photo upload and confirmation.';
     scanWindowMs = Math.max(1, Math.min(900, Number(input('reset').value) || 300)) * 1000;
     const waitMs = fixedRun ? qrInactivityDelay({ needsQr: true, hasToken: false, scanWindowMs }) : scanWindowMs;
@@ -95,7 +95,7 @@ input('start').onclick = async () => {
     if (input('pool').checked) {
       $('pool-status').textContent = 'Pool portrait: uploading…';
       // Same fire-and-forget parallel path as LostConnectionPrinting.
-      void (fixedRun ? candidatePool : baselinePool).joinPool({ portraitDataUrl: testCanvas().toDataURL('image/png'), code: '000000', sessionId: 'synthetic-local-session', seed: true }).then(ok => {
+      void (fixedRun ? candidatePool : baselinePool).joinPool({ portraitDataUrl: testCanvas().toDataURL('image/png'), code: '000000', sessionId: `synthetic-${localRun.id}`, seed: true }).then(ok => {
         $('pool-status').textContent = ok ? 'Pool portrait: saved.' : 'Pool portrait: FAILED (QR upload continues separately).';
         void log(`Synthetic pool result: ${ok ? 'saved' : 'failed'}`);
       });

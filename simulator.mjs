@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, readdir, copyFile } from 'node:fs/promises'
 import { join } from 'node:path';
 import { fork } from 'node:child_process';
 import diagnosticsModule from './candidate/diagnostics.cjs';
+import poolRetry from './candidate/capturism-relay/pool-retry.cjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 export const presets = {
@@ -15,6 +16,8 @@ export const presets = {
   idle_sign: { label: 'After idle: first signing requests fail', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
   idle_put: { label: 'After idle: first direct PUTs fail', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
   idle_join: { label: 'After idle: first pool confirmation fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
+  idle_ack: { label: 'After idle: pool saved but response lost', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
+  idle_persist: { label: 'After idle: first pool record save fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
 };
 
 export async function readBody(req, limit = 32 * 1024 * 1024) {
@@ -90,6 +93,15 @@ export class Simulator {
     await mkdir(join(dir, 'objects'), { recursive: true });
     await copyFile(new URL('./vendor/video-queue.cjs', import.meta.url), join(dir, 'video-queue.cjs'));
     this.run = { id, dir, scenario, cfg, started: Date.now(), coldUntil: Date.now() + cfg.cold * 1000, sessions: {}, pool: {}, faults: new Set(), objects: {}, signed: new Map(), commitFailures: cfg.commitFailures };
+    const run = this.run;
+    run.poolEntries = new Map();
+    run.joinOnce = poolRetry.createJoinCoordinator({ entries: run.poolEntries, persist: async entry => {
+      if (run.scenario === 'idle_persist' && !run.faults.has('pool.persist')) {
+        run.faults.add('pool.persist'); this.event('idle-fault', 'pool.persist: injected disk/storage error'); throw new Error('Injected storage failure');
+      }
+      await writeFile(join(dir, `pool-${entry.id}.json`), JSON.stringify(entry));
+      this.event('pool-persist', 'Synthetic pool record durably saved');
+    } });
     this.uplink = new Uplink(Math.max(1, cfg.kbps - cfg.contention) * 1024);
     this.event('run', cfg.label);
     if (scenario.startsWith('idle_')) this.event('idle-model', 'Injected first-use fault after modeled 2-hour idle; no Windows/Chrome idle is emulated');
@@ -161,19 +173,30 @@ export class Simulator {
     const run = this.run, generation = this.generation;
     if (p === '/api/relay/pool/sign-upload' && req.method === 'POST') {
       if (!(await this.cloudReady(res)) || this.fault('pool.sign', res)) return;
-      await readBody(req, 4096);
-      const entryId = randomBytes(8).toString('hex'), key = `pool-portraits/${entryId}.jpg`, sig = randomBytes(12).toString('hex');
+      const body = JSON.parse(await readBody(req, 4096));
+      const entryId = body.retryVersion === 1 ? poolRetry.uploadIdentity('local-twin', body.sessionId, body.code) : randomBytes(8).toString('hex');
+      const key = `pool-portraits/${entryId}.jpg`, sig = randomBytes(12).toString('hex');
       run.signed.set(sig, { key, contentType: 'image/jpeg', expires: Date.now() + 600000 });
       this.event('pool-sign', 'Pool portrait upload URL issued');
-      return json(res, 200, { entryId, key, uploadUrl: `${this.baseUrl}/storage/${sig}` });
+      return json(res, 200, { entryId, key, retryVersion: body.retryVersion === 1 ? 1 : undefined, uploadUrl: `${this.baseUrl}/storage/${sig}` });
     }
     if (p === '/api/relay/pool/join' && req.method === 'POST') {
       if (!(await this.cloudReady(res)) || this.fault('pool.join', res)) return;
       const body = JSON.parse(await readBody(req, 4096));
       if (!run.objects[body.portraitKey]) return json(res, 400, { error: 'Pool portrait not stored' });
       // Synthetic pool only: no identity, consent, matching or real quiz validation.
-      run.pool[body.entryId] = { portraitKey: body.portraitKey };
-      this.event('pool-joined', 'Synthetic pool portrait registered'); return json(res, 200, { ok: true });
+      try {
+        if (body.retryVersion === 1) {
+          if (body.entryId !== poolRetry.uploadIdentity('local-twin', body.sessionId, body.code) || body.portraitKey !== `pool-portraits/${body.entryId}.jpg`) return json(res, 409, { error: 'Identity conflict' });
+          await run.joinOnce({ id: body.entryId, boothId: 'local-twin', sessionId: body.sessionId, portraitKey: body.portraitKey });
+        }
+        run.pool[body.entryId] = { portraitKey: body.portraitKey };
+      } catch (err) { return json(res, err.status || 503, { error: 'Pool confirmation failed' }); }
+      this.event('pool-joined', 'Synthetic pool portrait registered');
+      if (run.scenario === 'idle_ack' && !run.faults.has('pool.ack')) {
+        run.faults.add('pool.ack'); this.event('idle-fault', 'Pool saved; confirmation response lost'); res.destroy(); return;
+      }
+      return json(res, 200, { ok: true, entryId: body.entryId });
     }
     if (p === '/api/video-queue' && req.method === 'POST') {
       if (!this.workerPort) return json(res, 503, { error: 'Local bridge stopped' });

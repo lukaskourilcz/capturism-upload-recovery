@@ -36,19 +36,57 @@ test('real pool client and QR uploader under injected first-use failures after i
   global.fetch = (url, init) => { const u = new URL(url, twin.baseUrl); assert.equal(u.hostname, '127.0.0.1'); return nativeFetch(u, init); };
   try {
     const client = await import(pathToFileURL(file));
-    for (const scenario of ['normal','idle_sign','idle_put','idle_join']) await t.test(scenario, async () => {
+    for (const scenario of ['normal','idle_sign','idle_put','idle_join','idle_ack','idle_persist']) await t.test(scenario, async () => {
       await twin.simulator.start({ scenario });
       const [pool, token] = await Promise.all([
-        client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: 'local-test', seed: true }),
+        client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: `local-test-${scenario}`, seed: true }),
         client.uploadSessionToCloud({ photo: new Blob([new Uint8Array(32 * 1024)], { type: 'image/jpeg' }) }),
       ]);
-      assert.equal(pool, scenario === 'normal'); assert.ok(token);
+      assert.equal(pool, true); assert.ok(token);
       const state = await twin.simulator.snapshot();
-      assert.equal(Object.keys(state.pool).length, scenario === 'normal' ? 1 : 0);
+      assert.equal(Object.keys(state.pool).length, 1);
+      assert.equal(state.events.filter(e => e.stage === 'pool-persist').length, 1, 'only one durable entry save');
+      if (['idle_join','idle_ack','idle_persist'].includes(scenario)) assert.equal(state.events.filter(e => e.stage === 'put-done' && e.key.startsWith('pool-portraits/')).length, 1, 'confirmation retries must not upload again');
       if (scenario !== 'normal') assert.ok(state.events.some(e => e.stage === 'idle-fault'));
-      // The same one-attempt pool client succeeds on the next session once
-      // the first-use fault has been consumed (no scenario reset).
-      assert.equal(await client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: 'next-local-test', seed: true }), true);
+      // A separate consenting session remains independent after recovery.
+      assert.equal(await client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: `next-local-test-${scenario}`, seed: true }), true);
+    });
+    await t.test('concurrent and repeated calls use one entry and one PUT', async () => {
+      await twin.simulator.start({ scenario: 'normal' });
+      const args = { portraitDataUrl: 'synthetic', code: '000000', sessionId: 'concurrent', seed: true };
+      assert.deepEqual(await Promise.all([client.joinPool(args), client.joinPool(args)]), [true, true]);
+      assert.equal(await client.joinPool(args), true);
+      const state = await twin.simulator.snapshot();
+      assert.equal(Object.keys(state.pool).length, 1);
+      assert.equal(state.events.filter(e => e.stage === 'pool-sign').length, 1);
+      assert.equal(state.events.filter(e => e.stage === 'pool-persist').length, 1);
+    });
+    for (const boundary of ['sign','put','expired','permanent','exhausted']) await t.test(`pool retry boundary: ${boundary}`, async () => {
+      await twin.simulator.start({ scenario: 'normal' });
+      const localFetch = global.fetch; let injected = false, joins = 0;
+      global.fetch = async (url, init) => {
+        const u = new URL(url, twin.baseUrl);
+        if (u.pathname === '/api/relay/pool/join') {
+          joins++;
+          if (boundary === 'permanent') return new Response('{}', { status: 400 });
+          if (boundary === 'exhausted') return new Response('{}', { status: 503 });
+        }
+        const poolPut = u.pathname.startsWith('/storage/') && twin.simulator.run.signed.get(u.pathname.split('/')[2])?.key.startsWith('pool-portraits/');
+        if (boundary === 'expired' && poolPut && !injected) { injected = true; return new Response('{}', { status: 403 }); }
+        const response = await localFetch(url, init);
+        if (!injected && ((boundary === 'sign' && u.pathname.endsWith('/pool/sign-upload')) || (boundary === 'put' && poolPut))) {
+          injected = true; await response.arrayBuffer(); throw new TypeError('Injected lost response');
+        }
+        return response;
+      };
+      try {
+        const ok = await client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: `boundary-${boundary}`, seed: true });
+        assert.equal(ok, !['permanent','exhausted'].includes(boundary));
+        const state = await twin.simulator.snapshot();
+        assert.equal(Object.keys(state.pool).length, ok ? 1 : 0);
+        assert.equal(joins, boundary === 'permanent' ? 1 : boundary === 'exhausted' ? 5 : 1);
+        assert.equal(new Set([...twin.simulator.run.signed.values()].map(v => v.key)).size, 1, 'all signing and PUT retries must keep the same object');
+      } finally { global.fetch = localFetch; }
     });
     await t.test('diagnostic events persist through bridge process restart and reject oversized batches', async () => {
       const body = [{ stage: 'pool.put', outcome: 'error', status: 503, trace: '12345678-abcd', uploadUrl: 'PRIVATE' }];
