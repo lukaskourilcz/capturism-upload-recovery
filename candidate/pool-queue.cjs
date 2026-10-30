@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const { Readable, Transform } = require('stream');
+const { isLocalRequest } = require('./local-request.cjs');
 const MAX_PHOTO = 20 * 1024 * 1024;
 const MAX_DISK = 1024 * 1024 * 1024;
 const MAX_AGE = 24 * 3600_000;
@@ -28,7 +29,13 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
   const read = file => {
     const job = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8'));
     if (job.id !== file.slice(0, -5) || !/^[a-f0-9]{64}$/.test(job.digest || '') || !['pending','uploaded','done','blocked'].includes(job.phase)) throw new Error('Invalid queue record');
+    if (typeof job.seed !== 'boolean') throw new Error('Invalid queue seed flag');
+    if (job.phase === 'done' && (!Number.isFinite(job.deliveredAt) || job.deliveredAt < 0)) throw new Error('Invalid queue receipt');
     if (job.phase !== 'done') {
+      if (!Number.isInteger(job.attempts) || job.attempts < 0 || !Number.isFinite(job.queuedAt) || job.queuedAt < 0 || !Number.isFinite(job.nextAttemptAt) || job.nextAttemptAt < 0) throw new Error('Invalid queue recovery metadata');
+      if (job.entryId !== undefined || job.phase === 'uploaded') {
+        if (job.entryId !== job.id.slice(0, 16) || job.key !== `pool-portraits/${job.entryId}.jpg`) throw new Error('Invalid uploaded checkpoint');
+      }
       const identity = crypto.createHash('sha256').update(JSON.stringify([boothId, job.sessionId, job.code])).digest('hex');
       if (identity !== job.id || typeof job.photoBase64 !== 'string' || crypto.createHash('sha256').update(Buffer.from(job.photoBase64, 'base64')).digest('hex') !== job.digest) throw new Error('Pool queue checksum mismatch');
     }
@@ -137,7 +144,7 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
   const status = () => files().map(file => { try { const j = read(file); return { phase: j.phase, attempts: j.attempts || 0, nextAttemptAt: j.nextAttemptAt || 0 }; } catch { return { phase: 'corrupt' }; } });
   async function handle(req, res) {
     const reply = (status, data) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); } };
-    if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return reply(403, {});
+    if (!isLocalRequest(req)) return reply(403, {});
     let bytes = 0; const chunks = [];
     try {
       for await (const chunk of req) { bytes += chunk.length; if (bytes > Math.ceil(MAX_PHOTO / 3) * 4 + 4096) return reply(413, {}); chunks.push(chunk); }

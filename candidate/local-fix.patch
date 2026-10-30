@@ -570,7 +570,7 @@
 +}
 +function createJoinCoordinator({ entries, persist }) {
 +  const pending = new Map();
-+  function same(a, b) { return a.id === b.id && a.boothId === b.boothId && a.sessionId === b.sessionId && a.portraitKey === b.portraitKey; }
++  function same(a, b) { return a.id === b.id && a.boothId === b.boothId && a.sessionId === b.sessionId && a.portraitKey === b.portraitKey && a.seed === b.seed; }
 +  function conflict() { throw Object.assign(new Error('Pool upload identity conflict'), { status: 409 }); }
 +  return async function join(entry) {
 +    const key = JSON.stringify([entry.boothId, entry.sessionId]);
@@ -620,10 +620,13 @@
  }
  
  function activeCount() {
-@@ -116,10 +125,18 @@
+@@ -115,11 +124,20 @@
+     let data;
      try { data = JSON.parse(body); }
      catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
- 
+-
++    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected JSON object" });
++
 +    if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
 +    if (data.retryVersion === 1 && data.contentType !== "image/jpeg") return jsonResponse(res, 400, { error: "Retry uploads require JPEG" });
      const ext = PORTRAIT_CONTENT_TYPES.get(data.contentType);
@@ -640,7 +643,7 @@
      const key = `${PORTRAIT_PREFIX}${entryId}.${ext}`;
      try {
        const uploadUrl = await getSignedUrl(
-@@ -128,7 +145,7 @@
+@@ -128,7 +146,7 @@
          { expiresIn: SIGNED_UPLOAD_TTL_S },
        );
        console.log(`[pool] signed portrait upload for ${boothId} → ${key}`);
@@ -649,10 +652,13 @@
      } catch (err) {
        console.error(`[pool] sign-upload failed: ${err.message}`);
        jsonResponse(res, 500, { error: "Failed to sign upload URL" });
-@@ -150,18 +167,25 @@
+@@ -149,19 +167,27 @@
+     let data;
      try { data = JSON.parse(body); }
      catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
- 
+-
++    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected JSON object" });
++
 +    if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
      const entryId = typeof data.entryId === "string" && /^[a-f0-9]{16}$/.test(data.entryId)
        ? data.entryId : null;
@@ -677,7 +683,7 @@
      const entry = {
        id: entryId,
        boothId,
-@@ -183,8 +207,12 @@
+@@ -183,8 +209,12 @@
        distributions: [],
        status: "active",
      };
@@ -692,7 +698,7 @@
      console.log(`[pool] joined: ${entry.firstName} (@${entry.handle}) — ${activeCount()} active`);
      jsonResponse(res, 200, { ok: true, entryId: entry.id, activeCount: activeCount() });
    });
-@@ -441,8 +469,8 @@
+@@ -441,8 +471,8 @@
  
  // ── R2 persistence ──────────────────────────────────────────────────
  
@@ -703,7 +709,7 @@
    try {
      await r2Client.send(new PutObjectCommand({
        Bucket: R2_BUCKET,
-@@ -452,6 +480,7 @@
+@@ -452,6 +482,7 @@
      }));
    } catch (err) {
      console.error(`[pool] R2 persist failed for ${entry.id}: ${err.message}`);
@@ -711,7 +717,7 @@
    }
  }
  
-@@ -496,9 +525,10 @@
+@@ -496,9 +527,10 @@
  async function hydrate() {
    if (!r2Client) {
      console.log("[pool] R2 not configured — pool runs in-memory only (dev).");
@@ -723,7 +729,7 @@
      let token;
      do {
        const page = await r2Client.send(new ListObjectsV2Command({
-@@ -513,13 +543,16 @@
+@@ -513,13 +545,16 @@
            if (entry && entry.id) entries.set(entry.id, entry);
          } catch (err) {
            console.error(`[pool] hydrate skip ${obj.Key}: ${err.message}`);
@@ -742,10 +748,11 @@
  
 --- /dev/null
 +++ b/diagnostics.cjs
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,47 @@
 +'use strict';
 +const fs = require('fs');
 +const path = require('path');
++const { isLocalRequest } = require('./local-request.cjs');
 +const STAGES = new Set(['photo.sign','photo.put','photo.confirm','video.enqueue','pool.sign','pool.put','pool.join','pool.enqueue','pool.delivery','render.segmentation','render.raster','render.video','page.visibility','page.timer','page.boot','relay.http']);
 +// Only explicit metadata is written. Never accept arbitrary console output,
 +// URLs, request/response bodies, names, quiz codes, auth or signed query strings.
@@ -778,7 +785,7 @@
 +  } };
 +}
 +async function receiveDiagnostics(req, res, logger) {
-+  if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) { res.writeHead(403); res.end(); return; }
++  if (!isLocalRequest(req)) { res.writeHead(403); res.end(); return; }
 +  let body = ''; let size = 0;
 +  try {
 +    for await (const chunk of req) { size += chunk.length; if (size > 32768) { res.writeHead(413); res.end(); return; } body += chunk; }
@@ -789,6 +796,27 @@
 +  } catch { if (!res.headersSent) res.writeHead(400); res.end(); }
 +}
 +module.exports = { createDiagnostics, receiveDiagnostics, sanitize };
+--- /dev/null
++++ b/local-request.cjs
+@@ -0,0 +1,18 @@
++'use strict';
++const loopback = value => ['127.0.0.1','::1','::ffff:127.0.0.1','localhost','[::1]'].includes(value);
++function isLocalRequest(req) {
++  if (!loopback(req.socket.remoteAddress)) return false;
++  // Reverse-proxied/tunnel traffic also arrives over loopback. Do not trust
++  // that hop alone, or use forwarded headers as proof of local identity.
++  for (const name of Object.keys(req.headers)) if (/^(forwarded|via|x-forwarded-.*|cf-.*)$/i.test(name)) return false;
++  try {
++    const target = new URL(`http://${req.headers.host}`);
++    if (!loopback(target.hostname)) return false;
++    if (req.headers.origin) {
++      const origin = new URL(req.headers.origin);
++      if (!['http:', 'https:'].includes(origin.protocol) || !loopback(origin.hostname)) return false;
++    }
++  } catch { return false; }
++  return true;
++}
++module.exports = { isLocalRequest };
 --- a/payment-bridge.js
 +++ b/payment-bridge.js
 @@ -27,8 +27,11 @@
@@ -853,7 +881,7 @@
      boothId: BOOTH_ID,
 --- /dev/null
 +++ b/pool-queue.cjs
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,156 @@
 +'use strict';
 +const fs = require('fs');
 +const path = require('path');
@@ -861,6 +889,7 @@
 +const http = require('http');
 +const https = require('https');
 +const { Readable, Transform } = require('stream');
++const { isLocalRequest } = require('./local-request.cjs');
 +const MAX_PHOTO = 20 * 1024 * 1024;
 +const MAX_DISK = 1024 * 1024 * 1024;
 +const MAX_AGE = 24 * 3600_000;
@@ -884,7 +913,13 @@
 +  const read = file => {
 +    const job = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8'));
 +    if (job.id !== file.slice(0, -5) || !/^[a-f0-9]{64}$/.test(job.digest || '') || !['pending','uploaded','done','blocked'].includes(job.phase)) throw new Error('Invalid queue record');
++    if (typeof job.seed !== 'boolean') throw new Error('Invalid queue seed flag');
++    if (job.phase === 'done' && (!Number.isFinite(job.deliveredAt) || job.deliveredAt < 0)) throw new Error('Invalid queue receipt');
 +    if (job.phase !== 'done') {
++      if (!Number.isInteger(job.attempts) || job.attempts < 0 || !Number.isFinite(job.queuedAt) || job.queuedAt < 0 || !Number.isFinite(job.nextAttemptAt) || job.nextAttemptAt < 0) throw new Error('Invalid queue recovery metadata');
++      if (job.entryId !== undefined || job.phase === 'uploaded') {
++        if (job.entryId !== job.id.slice(0, 16) || job.key !== `pool-portraits/${job.entryId}.jpg`) throw new Error('Invalid uploaded checkpoint');
++      }
 +      const identity = crypto.createHash('sha256').update(JSON.stringify([boothId, job.sessionId, job.code])).digest('hex');
 +      if (identity !== job.id || typeof job.photoBase64 !== 'string' || crypto.createHash('sha256').update(Buffer.from(job.photoBase64, 'base64')).digest('hex') !== job.digest) throw new Error('Pool queue checksum mismatch');
 +    }
@@ -993,7 +1028,7 @@
 +  const status = () => files().map(file => { try { const j = read(file); return { phase: j.phase, attempts: j.attempts || 0, nextAttemptAt: j.nextAttemptAt || 0 }; } catch { return { phase: 'corrupt' }; } });
 +  async function handle(req, res) {
 +    const reply = (status, data) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); } };
-+    if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return reply(403, {});
++    if (!isLocalRequest(req)) return reply(403, {});
 +    let bytes = 0; const chunks = [];
 +    try {
 +      for await (const chunk of req) { bytes += chunk.length; if (bytes > Math.ceil(MAX_PHOTO / 3) * 4 + 4096) return reply(413, {}); chunks.push(chunk); }

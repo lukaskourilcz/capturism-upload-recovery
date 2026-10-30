@@ -124,6 +124,7 @@ function handleSignUpload(req, res, boothId) {
     let data;
     try { data = JSON.parse(body); }
     catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
+    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected JSON object" });
 
     if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
     if (data.retryVersion === 1 && data.contentType !== "image/jpeg") return jsonResponse(res, 400, { error: "Retry uploads require JPEG" });
@@ -166,6 +167,7 @@ function handlePoolJoin(req, res, boothId) {
     let data;
     try { data = JSON.parse(body); }
     catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
+    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected JSON object" });
 
     if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
     const entryId = typeof data.entryId === "string" && /^[a-f0-9]{16}$/.test(data.entryId)

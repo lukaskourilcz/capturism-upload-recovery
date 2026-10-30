@@ -8,7 +8,7 @@ function uploadIdentity(boothId, sessionId, code) {
 }
 function createJoinCoordinator({ entries, persist }) {
   const pending = new Map();
-  function same(a, b) { return a.id === b.id && a.boothId === b.boothId && a.sessionId === b.sessionId && a.portraitKey === b.portraitKey; }
+  function same(a, b) { return a.id === b.id && a.boothId === b.boothId && a.sessionId === b.sessionId && a.portraitKey === b.portraitKey && a.seed === b.seed; }
   function conflict() { throw Object.assign(new Error('Pool upload identity conflict'), { status: 409 }); }
   return async function join(entry) {
     const key = JSON.stringify([entry.boothId, entry.sessionId]);

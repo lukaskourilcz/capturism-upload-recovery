@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { isLocalRequest } = require('./local-request.cjs');
 const STAGES = new Set(['photo.sign','photo.put','photo.confirm','video.enqueue','pool.sign','pool.put','pool.join','pool.enqueue','pool.delivery','render.segmentation','render.raster','render.video','page.visibility','page.timer','page.boot','relay.http']);
 // Only explicit metadata is written. Never accept arbitrary console output,
 // URLs, request/response bodies, names, quiz codes, auth or signed query strings.
@@ -33,7 +34,7 @@ function createDiagnostics({ directory = path.join(__dirname, 'diagnostic-logs')
   } };
 }
 async function receiveDiagnostics(req, res, logger) {
-  if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) { res.writeHead(403); res.end(); return; }
+  if (!isLocalRequest(req)) { res.writeHead(403); res.end(); return; }
   let body = ''; let size = 0;
   try {
     for await (const chunk of req) { size += chunk.length; if (size > 32768) { res.writeHead(413); res.end(); return; } body += chunk; }
