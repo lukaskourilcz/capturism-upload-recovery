@@ -68,6 +68,8 @@ It also runs the original pool-upload client in parallel with the QR photo. Thre
 
 The **Local fix candidate** now includes [safe pool retries](candidate/POOL-RETRIES.md) and matching idempotent relay handlers. Two additional presets cover lost confirmation responses and failed record persistence. All five idle presets should save the portrait with the candidate; the original selector retains its one-attempt behavior for comparison. The candidate needs its matching relay protocol and is not a client-only production patch.
 
+Pool delivery is now [durable on the bridge](candidate/DURABLE-POOL.md): browser acceptance means the portrait was written locally, and the bridge resumes delivery from disk after browser reloads or process restarts. The twin reports **saved locally** separately from **delivered**. Use Restart bridge within the current experiment to test recovery; starting a fresh experiment intentionally uses a different queue folder.
+
 Automated coverage: original-source integrity; upstream queue guards; shared bandwidth and cancellation; real uploader to local storage/download; recovery after five failed confirmations; late-token rejection after reset; outage recovery; durable video queue delivery after process restart; local request-boundary checks.
 
 Browser verification on October 30: generated JPEG renders, QR appears after confirmation, both real synthetic WebM files reach the local viewer. The first healthy browser run showed QR at 2.8 seconds. This is a local test measurement, not a studio benchmark. The 55-second cold-start preset and physical hardware are not covered by the automated checks.

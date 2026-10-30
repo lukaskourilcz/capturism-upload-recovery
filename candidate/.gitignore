@@ -1,0 +1,95 @@
+# ─── Node ──────────────────────────────────────────────────────────
+# Never commit the dependency cache — it's huge, OS-specific, and
+# perfectly recreatable from package-lock.json by running `npm install`.
+node_modules/
+**/node_modules/
+
+# ─── Build outputs ─────────────────────────────────────────────────
+# Vite / Webpack / Next.js / TS compiled artifacts. Generated on the
+# kiosk by `npm run build` after each git pull.
+dist/
+**/dist/
+build/
+**/build/
+.next/
+.vite/
+coverage/
+
+# ─── Secrets ───────────────────────────────────────────────────────
+# .env holds the booth API key + payment terminal creds — NEVER push.
+# .env.example is a redacted template and IS safe to commit.
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
+# Backups / copies of an env file (.env.bak-20261012, .env.old ...). The
+# patterns above only matched .env and .env.local, so a hand-made backup was
+# swept up by `git add -A` and pushed with the booth key inside (2026-10-21).
+# Everything named .env.<anything> is secret EXCEPT the redacted template.
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
+
+# bridge-secrets.bat holds the BOOTH_KEY and any other per-kiosk
+# secrets sourced by start-payment-bridge.bat via `call`. Created
+# once per kiosk PC, NEVER committed. The repo ships a redacted
+# bridge-secrets.bat.example as the template; operators copy it
+# locally and fill in real values. Keeping the file gitignored is
+# what makes `git pull` safe — without this, the key gets clobbered
+# by the repo's placeholder on every pull (which happened twice
+# during the 2026-06-11 session before this fix landed).
+bridge-secrets.bat
+
+# payment-secrets.bat holds the CAPTURISM_ADMIN_HMAC_SECRET (and
+# any future per-kiosk env-driven secrets for capturism-server on
+# :3002). Sourced by start-payment.bat via `call`. Same gitignored
+# pattern as bridge-secrets.bat — set up once, survives every pull.
+payment-secrets.bat
+
+# ─── OS / Editor cruft ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.vscode/
+.idea/
+
+# ─── Misc ──────────────────────────────────────────────────────────
+*.tsbuildinfo
+.eslintcache
+
+# ─── Bridge runtime artifacts ──────────────────────────────────────
+# JPEGs the bridge saves from EDSDK captures, served back to the
+# kiosk at /captures/<name>. Recreated at runtime — not source.
+captures/
+**/captures/
+
+# ─── capturism-server runtime data ─────────────────────────────────
+# Photos saved at /photos, rendered prints at /prints, and the SE1042
+# AL-recovery journal at /state/pending-al.json — all generated on the
+# booth PC at runtime. Do not commit.
+capturism-server/photos/
+capturism-server/prints/
+capturism-server/state/
+
+# ─── AI tooling config (laptop-only) ───────────────────────────────
+# Claude Code's per-project state and skill caches — only useful on
+# the developer laptop, not on the kiosk or for other contributors.
+.claude/
+.agents/
+
+# Printer consumable counters — live booth state, per-machine.
+# Committing these would let a git pull clobber the real count.
+media-counter.json
+media-counter.json.tmp
+ribbon-counter.json
+
+# Queued customer videos awaiting upload — local to each booth, never commit.
+video-queue/
+
+# Durable pool portraits and private local diagnostic events.
+pool-queue/
+diagnostic-logs/

@@ -1,5 +1,7 @@
 # Safe pool upload retries — local candidate
 
+**Updated:** browser-owned delivery has now been replaced by the [durable bridge queue](DURABLE-POOL.md). The direct-browser algorithm and its limits below describe the earlier candidate, retained as a regression fixture. Stable relay identity and durable, idempotent confirmation remain in use.
+
 Based on Capturism `1f2df64`. These are local review files and a combined patch, not installed production changes.
 
 ## Behavior

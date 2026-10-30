@@ -125,12 +125,14 @@ async function refresh() {
   try {
     const s = await api('/lab/state');
     if (!s.run) return;
+    input('bridge').disabled = false;
     if (started) $('elapsed').textContent = `${Math.floor((Date.now() - started) / 1000)}s elapsed`;
     if (s.poolQueue?.some(q => q.phase === 'done')) $('pool-status').textContent = 'Pool portrait: delivered from durable queue.';
     else if (s.poolQueue?.some(q => ['blocked','corrupt'].includes(q.phase))) $('pool-status').textContent = 'Pool portrait: retained locally; operator attention required.';
+    else if (s.poolQueue?.some(q => ['pending','uploaded'].includes(q.phase))) $('pool-status').textContent = 'Pool portrait: saved locally; bridge will resume delivery.';
     $('queue-count').textContent = `${s.queue.length} waiting`;
     const items = $('queue-items'); items.replaceChildren();
-    if (!s.queue.length) items.textContent = s.events.some(e => e.stage === 'bridge' && e.detail.includes('delivered')) ? 'All queued clips delivered.' : 'No pending videos.';
+    if (!s.queue.length) items.textContent = s.events.some(e => e.stage === 'bridge' && e.detail.includes('[video-queue]') && e.detail.includes('delivered')) ? 'All queued clips delivered.' : 'No pending videos.';
     for (const q of s.queue) {
       const el = document.createElement('div'); el.className = 'queue-entry';
       el.textContent = `${q.kind} · ${q.attempts} failed attempts${q.nextAttemptAt ? ' · next retry in ' + Math.max(0, Math.ceil((q.nextAttemptAt - Date.now()) / 1000)) + 's' : ' · waiting for worker'}${q.lastError ? ' · ' + q.lastError : ''}`;
