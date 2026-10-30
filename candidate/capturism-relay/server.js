@@ -39,6 +39,7 @@ const reviewPipeline = require("./reviewPipeline");
 const pool = require("./pool");
 const quiz = require("./quiz");
 const backup = require("./backup");
+const { createSessionMetadataStore } = require("./session-metadata.cjs");
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -227,6 +228,8 @@ const loginAttempts = new Map();
  * @type {Map<string, { photoKey: string, videoKey?: string, layoutVideoKey?: string, storyVideoKey?: string, boothId: string, createdAt: number, expiresAt: number }>}
  */
 const sessions = new Map();
+const sessionMetadata = createSessionMetadataStore({ client: r2Client, bucket: R2_BUCKET,
+  commands: { GetObjectCommand, PutObjectCommand }, cache: sessions, ttlMs: SESSION_TTL_MS });
 
 /**
  * Session-complete events used to compute admin stats. Persisted to R2
@@ -745,27 +748,11 @@ function handleGetBooths(req, res) {
 /**
  * Update a session IN PLACE without resetting its clock.
  *
- * Deliberately not storeSession(): that rebuilds the record from scratch
- * and stamps a fresh createdAt/expiresAt, which would silently extend a
- * session's 24h life every time we cached a probe result.
+ * Uses the same conditional metadata writer as confirmation, preserving
+ * committed video keys and the original createdAt/expiresAt.
  */
 async function patchSession(token, patch) {
-  const session = sessions.get(token);
-  if (!session) return null;
-  Object.assign(session, patch);
-  if (r2Client) {
-    try {
-      await r2Client.send(new PutObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: `sessions/${token}/meta.json`,
-        Body: JSON.stringify(session),
-        ContentType: "application/json",
-      }));
-    } catch (err) {
-      console.warn(`[SESSION] patch mirror failed for ${token}: ${err.message}`);
-    }
-  }
-  return session;
+  return sessionMetadata.patch(token, patch);
 }
 
 /**
@@ -812,7 +799,7 @@ async function probeForVideos(token, session) {
   }));
   if (Object.keys(found).length === 0) return session;
   console.log(`[DOWNLOAD] Recovered ${Object.keys(found).length} orphaned video(s) for ${token} by probing R2`);
-  return (await patchSession(token, found)) || Object.assign(session, found);
+  return patchSession(token, found);
 }
 
 async function handleGetDownload(req, res, token) {
@@ -1088,19 +1075,22 @@ function handlePhotosReady(req, res) {
       return jsonResponse(res, 400, { error: "Invalid JSON" });
     }
 
+    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected object" });
     const { token, photoKey, videoKey, layoutVideoKey, storyVideoKey, videosPending } = data;
     if (!token || !photoKey) {
       return jsonResponse(res, 400, { error: "token and photoKey required" });
     }
 
-    await storeSession(token, {
-      photoKey,
-      videoKey,
-      layoutVideoKey,
-      storyVideoKey,
-      videosPending,
-      boothId,
-    });
+    let committed;
+    try {
+      committed = await storeSession(token, { photoKey, videoKey, layoutVideoKey, storyVideoKey, videosPending, boothId });
+    } catch (err) {
+      // An unknown provider outcome is retryable with the same token. Never
+      // acknowledge or broadcast an in-memory-only download session.
+      if (res.destroyed || res.writableEnded) return;
+      const status = [400,409,410].includes(err.status) ? err.status : 503;
+      return jsonResponse(res, status, { error: status === 503 ? "Download metadata not confirmed; retry with the same token" : "Download confirmation rejected" });
+    }
     console.log(`[BOOTH] Stored session ${token} from ${boothId} (HTTP, videos: ${[videoKey, layoutVideoKey, storyVideoKey].filter(Boolean).length})`);
 
     broadcastToAdmins({
@@ -1108,10 +1098,10 @@ function handlePhotosReady(req, res) {
       boothId,
       payload: {
         token,
-        photoKey,
-        videoKey: videoKey || undefined,
-        layoutVideoKey: layoutVideoKey || undefined,
-        storyVideoKey: storyVideoKey || undefined,
+        photoKey: committed.photoKey,
+        videoKey: committed.videoKey || undefined,
+        layoutVideoKey: committed.layoutVideoKey || undefined,
+        storyVideoKey: committed.storyVideoKey || undefined,
       },
       timestamp: new Date().toISOString(),
     });
@@ -1140,6 +1130,7 @@ function handleDevSeed(req, res) {
       return jsonResponse(res, 400, { error: "Invalid JSON" });
     }
 
+    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected object" });
     if (data.key !== DEV_SEED_KEY) {
       return jsonResponse(res, 401, { error: "Invalid seed key" });
     }
@@ -1147,11 +1138,11 @@ function handleDevSeed(req, res) {
       return jsonResponse(res, 400, { error: "token and photoKey required" });
     }
 
-    await storeSession(data.token, {
-      photoKey: data.photoKey,
-      videoKey: data.videoKey,
-      boothId: data.boothId || "dev-seed",
-    });
+    try {
+      await storeSession(data.token, { photoKey: data.photoKey, videoKey: data.videoKey, boothId: data.boothId || "dev-seed" });
+    } catch (err) {
+      return jsonResponse(res, [400,409,410].includes(err.status) ? err.status : 503, { error: "Seed metadata not confirmed" });
+    }
     console.log(`[DEV] Seeded session ${data.token} → ${data.photoKey}`);
 
     jsonResponse(res, 200, {
@@ -1474,13 +1465,11 @@ function handleBoothConnection(ws, boothId) {
         console.warn(`[BOOTH] photos_ready missing token/photoKey from ${boothId}`);
         return;
       }
-      // Fire-and-forget — WS handler isn't awaited, but storeSession's R2
-      // mirror still completes in the background so the session survives
-      // a relay restart shortly after.
-      storeSession(token, { photoKey, videoKey, boothId })
-        .then(() => console.log(`[BOOTH] Stored session ${token} from ${boothId}`))
-        .catch((err) => console.error(`[BOOTH] storeSession failed: ${err.message}`));
-      broadcastToAdmins(msg);
+      // Match HTTP confirmation: notify only after durable metadata success.
+      try {
+        const committed = await storeSession(token, { photoKey, videoKey, layoutVideoKey: msg.payload.layoutVideoKey, storyVideoKey: msg.payload.storyVideoKey, videosPending: msg.payload.videosPending, boothId });
+        broadcastToAdmins({ ...msg, payload: { ...msg.payload, photoKey: committed.photoKey, videoKey: committed.videoKey, layoutVideoKey: committed.layoutVideoKey, storyVideoKey: committed.storyVideoKey } });
+      } catch { console.error("[BOOTH] download metadata not confirmed; notification withheld"); }
       return;
     }
 
@@ -1721,78 +1710,15 @@ setInterval(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Persists a session to in-memory Map AND mirrors to R2 so the mapping
- * survives relay restarts (Render free-tier sleeps, deploys, etc.).
- * The R2 write is awaited so we don't reply "ok" to the booth before the
- * session is durable — but we tolerate R2 failures (in-memory copy is
- * still useful for the rest of this relay's life).
- */
-async function storeSession(token, { photoKey, videoKey, layoutVideoKey, storyVideoKey, boothId, videosPending }) {
-  const now = Date.now();
-  const session = {
-    photoKey,
-    videoKey: videoKey || undefined,
-    layoutVideoKey: layoutVideoKey || undefined,
-    storyVideoKey: storyVideoKey || undefined,
-    // Set on the photo-only commit when video uploads are still running.
-    // Lets the download page wait for them instead of rendering a
-    // photo-only page the customer never comes back to.
-    videosPending: videosPending === true || undefined,
-    boothId,
-    createdAt: now,
-    expiresAt: now + SESSION_TTL_MS,
-  };
-  sessions.set(token, session);
-
-  if (r2Client) {
-    try {
-      await r2Client.send(new PutObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: `sessions/${token}/meta.json`,
-        Body: JSON.stringify(session),
-        ContentType: "application/json",
-      }));
-    } catch (err) {
-      console.warn(`[SESSION] R2 mirror failed for ${token}: ${err.message}`);
-    }
-  }
+/** Persist before acknowledging/caching. Replays preserve media and clocks. */
+async function storeSession(token, input) {
+  return sessionMetadata.save(token, input);
 }
 
-/**
- * Resolves a session — checks the in-memory cache first, falls back to
- * R2 if missing (e.g. after a relay restart). Returns null if not found
- * anywhere, or if the session has expired.
- */
+/** Load only committed metadata; failed writes never populate this cache. */
 async function loadSession(token) {
-  let session = sessions.get(token);
-
-  if (!session && r2Client) {
-    try {
-      const r = await r2Client.send(new GetObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: `sessions/${token}/meta.json`,
-      }));
-      const chunks = [];
-      for await (const chunk of r.Body) chunks.push(chunk);
-      session = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      sessions.set(token, session); // warm the cache
-      console.log(`[SESSION] Rehydrated ${token} from R2`);
-    } catch (err) {
-      if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) {
-        return null;
-      }
-      console.error(`[SESSION] R2 read failed for ${token}: ${err.message}`);
-      return null;
-    }
-  }
-
-  if (!session) return null;
-  if (Date.now() > session.expiresAt) {
-    sessions.delete(token);
-    return null;
-  }
-  return session;
+  try { return await sessionMetadata.load(token); }
+  catch { console.error("[SESSION] durable metadata unavailable"); return null; }
 }
 
 /**

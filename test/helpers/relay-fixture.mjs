@@ -9,6 +9,7 @@ class PutObjectCommand { constructor(input) { this.input = input; } }
 class GetObjectCommand { constructor(input) { this.input = input; } }
 class ListObjectsV2Command { constructor(input) { this.input = input; } }
 class DeleteObjectCommand { constructor(input) { this.input = input; } }
+export const storageCommands = { PutObjectCommand, GetObjectCommand };
 const source = await readFile(new URL('../../candidate/capturism-relay/pool.js', import.meta.url), 'utf8');
 export function makeRelay(storage, code = source, boothId = 'test-booth') {
   const module = { exports: {} };

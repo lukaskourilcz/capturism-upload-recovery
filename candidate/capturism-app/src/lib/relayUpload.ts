@@ -301,7 +301,7 @@ export const SESSION_UPLOAD_PATIENCE_MS = 10 * 60_000
 
 /** 4xx responses that retrying cannot fix. 403 is deliberately NOT here: an
  *  expired signed URL answers 403, and the next attempt signs a fresh one. */
-const PERMANENT_FAILURE = /failed: (400|401|404|405|409|413|415|422)\b/
+const PERMANENT_FAILURE = /failed: (400|401|404|405|409|410|413|415|422)\b/
 
 /**
  * Sign, PUT and commit the photo — and, if retryForMs allows, do it again

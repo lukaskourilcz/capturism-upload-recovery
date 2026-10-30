@@ -5,6 +5,7 @@ import { fork } from 'node:child_process';
 import diagnosticsModule from './candidate/diagnostics.cjs';
 import poolRetry from './candidate/capturism-relay/pool-retry.cjs';
 import publicationModule from './candidate/capturism-relay/pool-publication.cjs';
+import metadataModule from './candidate/capturism-relay/session-metadata.cjs';
 import { localPoolStorage, poolCommands } from './local-pool-store.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -22,7 +23,7 @@ export const presets = {
   idle_persist: { label: 'After idle: first pool record save fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
   qr_idle_confirm: { label: 'After idle: first QR confirmation fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 1, contention: 0 },
   qr_idle_ack: { label: 'After idle: QR saved, response lost', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
-  qr_idle_save: { label: 'After idle: first QR record save fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 1, contention: 0 },
+  qr_idle_save: { label: 'After idle: first QR record save fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
 };
 
 export async function readBody(req, limit = 32 * 1024 * 1024) {
@@ -99,6 +100,15 @@ export class Simulator {
     await copyFile(new URL('./vendor/video-queue.cjs', import.meta.url), join(dir, 'video-queue.cjs'));
     this.run = { id, dir, scenario, cfg, started: Date.now(), coldUntil: Date.now() + cfg.cold * 1000, sessions: {}, pool: {}, faults: new Set(), objects: {}, signed: new Map(), commitFailures: cfg.commitFailures };
     const run = this.run;
+    run.qrStorage = localPoolStorage(join(dir, 'qr-metadata'), {
+      beforePut: async () => {
+        if (run.scenario === 'qr_idle_save' && !run.faults.has('qr.metadata')) {
+          run.faults.add('qr.metadata'); this.event('idle-fault', 'Injected QR metadata write failure'); throw new Error('QR metadata storage failure');
+        }
+      },
+      onPut: () => this.event('qr-metadata-persist', 'QR download metadata durably saved'),
+    });
+    this.openQrMetadata();
     run.poolEntries = new Map();
     run.joinOnce = poolRetry.createJoinCoordinator({ entries: run.poolEntries, persist: async entry => {
       if (run.scenario === 'idle_persist' && !run.faults.has('pool.persist')) {
@@ -127,6 +137,10 @@ export class Simulator {
     if (scenario.startsWith('idle_')) this.event('idle-model', 'Injected first-use fault after modeled 2-hour idle; no Windows/Chrome idle is emulated');
     await this.startWorker();
     return { id, cfg };
+  }
+  openQrMetadata() {
+    this.run.qrMetadata = metadataModule.createSessionMetadataStore({ client: this.run.qrStorage, bucket: 'local-only', commands: poolCommands, cache: new Map(), ttlMs: 86400000 });
+    this.run.sessions = {};
   }
   async startWorker() {
     if (!this.workerEnabled || !this.run) return;
@@ -183,6 +197,10 @@ export class Simulator {
     if (p === '/api/relay/configured') return json(res, 200, { configured: true });
     if (p === '/lab/state') return json(res, 200, await this.snapshot());
     if (p === '/lab/start' && req.method === 'POST') return json(res, 200, await this.start(JSON.parse(await readBody(req, 4096))));
+    if (p === '/lab/restart-relay' && req.method === 'POST') {
+      if (!this.run) return json(res, 409, { error: 'Start a local experiment first' });
+      this.openQrMetadata(); this.event('relay-restart', 'QR relay cache reopened against retained provider metadata'); return json(res, 200, { ok: true });
+    }
     if (p === '/lab/client-event' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req, 16384)); this.event('kiosk', String(body.message || body.code || '').slice(0, 2000)); return json(res, 200, { ok: true });
     }
@@ -302,8 +320,12 @@ export class Simulator {
       const b = JSON.parse(await readBody(req, 8192));
       if (run.commitFailures-- > 0) { this.event('commit-failed', 'Injected confirmation failure → HTTP 503', { token: b.token }); return json(res, 503, { error: 'Simulated confirmation failure' }); }
       if (!run.objects[b.photoKey]) return json(res, 400, { error: 'Photo is not stored' });
-      // Explicitly simplified relay: merge keys; no R2 recovery, auth or expiry sweep.
-      run.sessions[b.token] = { ...run.sessions[b.token], ...b };
+      try {
+        run.sessions[b.token] = await run.qrMetadata.save(b.token, { photoKey: b.photoKey, videoKey: b.videoKey, layoutVideoKey: b.layoutVideoKey, storyVideoKey: b.storyVideoKey, videosPending: b.videosPending, boothId: 'local-twin' });
+      } catch (err) {
+        this.event('commit-failed', 'QR metadata not confirmed; retry with the same token', { token: b.token });
+        return json(res, [400,409,410].includes(err.status) ? err.status : 503, { error: 'QR metadata not confirmed' });
+      }
       this.event('confirmed', 'Session registered; download available', { token: b.token });
       if (run.scenario === 'qr_idle_ack' && !run.faults.has('photo.ack')) {
         run.faults.add('photo.ack'); this.event('idle-fault', 'Photo confirmation saved, HTTP acknowledgement lost'); res.destroy(); return;
@@ -311,7 +333,8 @@ export class Simulator {
       return json(res, 200, { ok: true, downloadUrl: `${this.baseUrl}/d/${b.token}` });
     }
     if (p.startsWith('/api/download/')) {
-      const session = run.sessions[p.split('/')[3]];
+      const token = p.split('/')[3], session = await run.qrMetadata.load(token).catch(() => null);
+      if (session) run.sessions[token] = session;
       return json(res, session ? 200 : 404, session || { error: 'Session not confirmed' });
     }
     if (p === '/lab/object') {

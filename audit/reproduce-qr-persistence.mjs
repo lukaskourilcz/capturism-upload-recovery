@@ -1,56 +1,22 @@
-// Evidence of a pre-existing relay boundary not modeled by the upload twin.
-// Success here means the unsafe acknowledgement was reproduced, not fixed.
+// Local before/after regression for the QR metadata acknowledgement boundary.
 import assert from 'node:assert/strict';
-import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
-
-class PutObjectCommand { constructor(input) { this.input = input; } }
-class GetObjectCommand { constructor(input) { this.input = input; } }
-function functions(source) {
-  const handler = source.slice(source.indexOf('function handlePhotosReady('), source.indexOf('/**\n * POST /api/dev/seed'));
-  const storage = source.slice(source.indexOf('async function storeSession('), source.indexOf('/**\n * Presign an R2 GET.'));
-  const download = source.slice(source.indexOf('async function handleGetDownload('), source.indexOf('/**\n * GET /api/proxy/:token/'));
-  assert.match(handler, /function handlePhotosReady/); assert.match(storage, /async function loadSession/);
-  assert.match(download, /async function handleGetDownload/);
-  return handler + '\n' + storage + '\n' + download;
-}
-function relay(code, objects, failWrites) {
-  const context = {
-    sessions: new Map(), SESSION_TTL_MS: 86400000, R2_BUCKET: 'isolated-local-fixture',
-    PutObjectCommand, GetObjectCommand, Buffer, Date, console: { log() {}, warn() {}, error() {} },
-    authenticateBooth: () => 'synthetic-booth', broadcastToAdmins() {},
-    readBody: (req, callback) => { void callback(JSON.stringify(req.body)); },
-    jsonResponse: (res, status, body) => res.resolve({ status, body }),
-    r2Client: { async send(command) {
-      const { Key, Body } = command.input;
-      if (command instanceof PutObjectCommand) {
-        if (failWrites) throw new Error('Injected metadata storage outage');
-        objects.set(Key, Body); return {};
-      }
-      if (!objects.has(Key)) throw Object.assign(new Error('No such key'), { name: 'NoSuchKey' });
-      return { Body: [Buffer.from(objects.get(Key))] };
-    } },
-  };
-  vm.createContext(context); vm.runInContext(code, context); return context;
-}
+import { storage } from '../test/helpers/relay-fixture.mjs';
+import { makeQrRelay, TOKEN, PHOTO, BODY } from '../test/helpers/qr-relay-fixture.mjs';
+const baseline = await readFile(new URL('../../diagnosis-2026-10-30/capturism-main/capturism-relay/server.js', import.meta.url), 'utf8');
 const results = [];
-for (const [version, path] of [
-  ['baseline', new URL('../../diagnosis-2026-10-30/capturism-main/capturism-relay/server.js', import.meta.url)],
-  ['candidate', new URL('../candidate/capturism-relay/server.js', import.meta.url)],
-]) {
-  const code = functions(await readFile(path, 'utf8')), objects = new Map();
-  const first = relay(code, objects, true), body = { token: 'synthetic-token', photoKey: 'sessions/synthetic-token/photo.jpg' };
-  objects.set(body.photoKey, Buffer.alloc(32, 7)); // earlier photo PUT succeeded
-  const ack = await new Promise(resolve => first.handlePhotosReady({ body }, { resolve }));
-  const visibleBeforeRestart = Boolean(await first.loadSession(body.token));
-  const afterRestart = relay(code, objects, false);
-  const visibleAfterRestart = Boolean(await afterRestart.loadSession(body.token));
-  const downloadAfterRestart = await new Promise(resolve => { void afterRestart.handleGetDownload({}, { resolve }, body.token); });
-  assert.equal(ack.status, 200); assert.equal(ack.body.ok, true);
-  assert.equal(visibleBeforeRestart, true); assert.equal(visibleAfterRestart, false);
-  assert.equal(downloadAfterRestart.status, 404);
-  results.push({ version, metadataSaveFailed: true, acknowledgement: ack.status, ok: ack.body.ok,
-    visibleBeforeRestart, visibleAfterRestart, downloadAfterRestartStatus: downloadAfterRestart.status,
-    photoStillStored: objects.has(body.photoKey), durableMetadataObjects: [...objects.keys()].filter(key => key.endsWith('/meta.json')).length });
+for (const version of ['baseline','candidate']) {
+  const store = storage(), options = version === 'baseline' ? { code: baseline } : {};
+  const relay = makeQrRelay(store, options); store.objects.set(PHOTO, Buffer.alloc(32, 7)); store.failWrites = 1;
+  const initial = await relay.confirm(BODY);
+  const failedCacheEntries = relay.cache.size, failedNotifications = relay.notifications.length;
+  const beforeRecovery = await makeQrRelay(store, options).download(TOKEN);
+  assert.equal(initial.status, version === 'baseline' ? 200 : 503);
+  assert.equal(beforeRecovery.status, 404);
+  if (version === 'candidate') { assert.equal(failedCacheEntries, 0); assert.equal(failedNotifications, 0); }
+  assert.equal((await relay.confirm(BODY)).status, 200);
+  const restartedDownload = await makeQrRelay(store, options).download(TOKEN); assert.equal(restartedDownload.status, 200);
+  results.push({ version, saveFailureResponse: initial.status, failedCacheEntries, failedNotifications,
+    beforeRecoveryRestartStatus: beforeRecovery.status, recoveryResponse: 200, acknowledgedRestartDownloadStatus: restartedDownload.status, photoStillStored: store.objects.has(PHOTO) });
 }
-console.log(JSON.stringify({ interpretation: 'Unsafe behavior reproduced in baseline and candidate; not a passing durability guarantee. No network/provider calls.', results }, null, 2));
+console.log(JSON.stringify({ interpretation: 'Baseline false success reproduced; candidate fails safely then persists before success. Local provider replacement only.', results }, null, 2));

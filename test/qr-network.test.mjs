@@ -41,6 +41,10 @@ test('QR shared deadline and recovery against local slow/idle HTTP services', as
       const state = await twin.simulator.snapshot(); assert.ok(state.sessions[token]); assert.equal(Object.keys(state.sessions).length, 1);
       assert.equal(state.events.filter(e => e.stage === 'put-done').length, 1);
       assert.equal(new Set(state.events.filter(e => e.stage === 'sign').map(e => e.token)).size, 1);
+      const metadata = state.sessions[token];
+      assert.equal((await originalFetch(twin.baseUrl + '/lab/restart-relay', { method: 'POST' })).status, 200);
+      const afterRestart = await originalFetch(twin.baseUrl + '/api/download/' + token);
+      assert.equal(afterRestart.status, 200); assert.deepEqual(await afterRestart.json(), metadata);
       results.push({ scenario, budgetMs: 5000, elapsedMs: Date.now() - start, events: state.events }); client.resetSession();
     });
     await t.test('cold signing wait expires without late QR, then works when relay wakes', async () => {

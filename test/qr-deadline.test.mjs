@@ -114,5 +114,10 @@ test('QR absolute deadline and same-session recovery', async t => {
       assert.equal(client.getQrUploadState().phase, 'failed'); assert.equal(client.getQrUploadState().canRetry, false);
       await assert.rejects(client.retryQrUpload()); client.resetSession();
     });
+    await t.test('expired relay session is permanent and cannot enter an automatic revival loop', async () => {
+      const { client, calls } = await setup(stage => stage === 'confirm' ? new Response('', { status: 410 }) : undefined);
+      await assert.rejects(client.uploadSessionToCloud({ photo, retryForMs: 600000 }), /failed: 410/);
+      assert.equal(calls.confirm, 1); assert.equal(client.getQrUploadState().phase, 'failed'); client.resetSession();
+    });
   } finally { global.fetch = originalFetch; await rm(directory, { recursive: true, force: true }); }
 });
