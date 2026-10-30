@@ -7,18 +7,18 @@ import { join } from 'node:path';
 import { makeRelay, storage, call } from './helpers/relay-fixture.mjs';
 import queueModule from '../candidate/pool-queue.cjs';
 
-test('relay-first rollout: new relay still accepts the original browser protocol', async () => {
+test('protocol 2 rollout rejects the unsafe legacy browser protocol', async () => {
   const relay = makeRelay(storage());
   const signed = await call(relay, 'handleSignUpload', { contentType: 'image/jpeg' });
-  assert.equal(signed.status, 200);
-  const result = await call(relay, 'handlePoolJoin', { entryId: signed.body.entryId, portraitKey: signed.body.key, sessionId: 'legacy-session', code: '000000', seed: true });
-  assert.equal(result.status, 200);
+  assert.equal(signed.status, 426);
+  assert.equal(signed.body.uploadUrl, undefined);
 });
 
-test('legacy relay rollback blocks v1 delivery but preserves every acknowledged byte', async () => {
+test('legacy relay rollback blocks v2 delivery but preserves every acknowledged byte', async () => {
   const source = await readFile(new URL('../../diagnosis-2026-10-30/capturism-main/capturism-relay/pool.js', import.meta.url), 'utf8');
   const legacy = makeRelay(storage(), source);
   const server = http.createServer(async (req, res) => {
+    if (req.url === '/api/booth/pool/upload') { req.resume(); res.writeHead(404); res.end('{}'); return; }
     let body = ''; for await (const chunk of req) body += chunk;
     const result = await call(legacy, 'handleSignUpload', JSON.parse(body), 'local-twin');
     res.writeHead(result.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result.body));

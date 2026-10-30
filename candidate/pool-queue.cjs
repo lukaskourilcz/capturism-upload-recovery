@@ -28,10 +28,10 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
   const files = () => { fs.mkdirSync(directory, { recursive: true, mode: 0o700 }); for (const f of fs.readdirSync(directory)) if (/^[a-f0-9]{64}\.json\.[a-f0-9]{12}\.part$/.test(f)) fs.unlinkSync(path.join(directory, f)); return fs.readdirSync(directory).filter(f => /^[a-f0-9]{64}\.json$/.test(f)); };
   const read = file => {
     const job = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8'));
-    if (job.id !== file.slice(0, -5) || !/^[a-f0-9]{64}$/.test(job.digest || '') || !['pending','uploaded','done','blocked'].includes(job.phase)) throw new Error('Invalid queue record');
+    if (job.id !== file.slice(0, -5) || !/^[a-f0-9]{64}$/.test(job.digest || '') || !['pending','uploaded','done','withdrawn','blocked'].includes(job.phase)) throw new Error('Invalid queue record');
     if (typeof job.seed !== 'boolean') throw new Error('Invalid queue seed flag');
-    if (job.phase === 'done' && (!Number.isFinite(job.deliveredAt) || job.deliveredAt < 0)) throw new Error('Invalid queue receipt');
-    if (job.phase !== 'done') {
+    if (['done','withdrawn'].includes(job.phase) && (!Number.isFinite(job.deliveredAt) || job.deliveredAt < 0)) throw new Error('Invalid queue receipt');
+    if (!['done','withdrawn'].includes(job.phase)) {
       if (!Number.isInteger(job.attempts) || job.attempts < 0 || !Number.isFinite(job.queuedAt) || job.queuedAt < 0 || !Number.isFinite(job.nextAttemptAt) || job.nextAttemptAt < 0) throw new Error('Invalid queue recovery metadata');
       if (job.entryId !== undefined || job.phase === 'uploaded') {
         if (job.entryId !== job.id.slice(0, 16) || job.key !== `pool-portraits/${job.entryId}.jpg`) throw new Error('Invalid uploaded checkpoint');
@@ -51,6 +51,7 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
     const names = files(), file = `${id}.json`;
     if (names.includes(file)) {
       const old = read(file);
+      if (old.phase === 'withdrawn') throw Object.assign(new Error('Pool entry withdrawn'), { status: 410 });
       if (old.digest !== digest || old.seed !== body.seed) throw Object.assign(new Error('Pool queue identity conflict'), { status: 409 });
       return { queued: true, delivered: old.phase === 'done', needsAttention: old.phase === 'blocked' };
     }
@@ -62,12 +63,13 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
     event('Pool portrait saved to local queue');
     return { queued: true, delivered: false };
   }
-  function request(url, { method = 'POST', body, contentType = 'application/json', auth = false, timeout = 60000, throttle = false } = {}) {
+  function request(url, { method = 'POST', body, contentType = 'application/json', auth = false, timeout = 60000, throttle = false, identity } = {}) {
     return new Promise((resolve, reject) => {
       const u = new URL(url);
       if (!['http:', 'https:'].includes(u.protocol)) return reject(new Error('Invalid upstream protocol'));
       if (!auth && u.protocol !== 'https:' && !['127.0.0.1','localhost','[::1]'].includes(u.hostname)) return reject(new Error('Insecure portrait destination'));
       const headers = { 'Content-Type': contentType, 'Content-Length': body?.length || 0 };
+      if (identity) headers['X-Pool-Upload'] = Buffer.from(JSON.stringify(identity)).toString('base64');
       if (auth) headers['X-Booth-Auth'] = `${boothId}:${boothKey}`;
       const req = (u.protocol === 'https:' ? https : http).request(u, { method, headers }, res => {
         let output = ''; res.setEncoding('utf8');
@@ -75,7 +77,17 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
         res.on('error', reject);
         res.on('end', () => {
           const status = res.statusCode;
-          if (status < 200 || status >= 300) return reject(Object.assign(new Error('Pool upstream request failed'), { status, permanent: auth && status >= 400 && status < 500 && ![408,429].includes(status) }));
+          if (status < 200 || status >= 300) {
+            let withdrawn = false;
+            if (status === 410 && identity) {
+              try {
+                const data = JSON.parse(output);
+                const expected = crypto.createHash('sha256').update(JSON.stringify([boothId, identity.sessionId, identity.code])).digest('hex').slice(0, 16);
+                withdrawn = data.withdrawn === true && data.publicationVersion === 2 && data.entryId === expected;
+              } catch { /* a generic HTTP 410 must retain the portrait */ }
+            }
+            return reject(Object.assign(new Error('Pool upstream request failed'), { status, withdrawn, permanent: auth && status >= 400 && status < 500 && ![408,429].includes(status) }));
+          }
           if (method === 'PUT') return resolve({});
           try { resolve(JSON.parse(output)); } catch { reject(new Error('Invalid pool response')); }
         });
@@ -101,20 +113,16 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
       source.pipe(paced).pipe(req);
     });
   }
-  const call = (endpoint, payload) => request(`${relayUrl}${endpoint}`, { auth: true, body: Buffer.from(JSON.stringify(payload)) });
   async function deliver(job) {
-    const identity = { retryVersion: 1, code: job.code, sessionId: job.sessionId };
-    if (job.phase === 'pending') {
-      const signed = await call('/api/booth/pool/sign-upload', { ...identity, contentType: 'image/jpeg' });
-      if (signed.retryVersion !== 1 || !/^[a-f0-9]{16}$/.test(signed.entryId || '') || signed.key !== `pool-portraits/${signed.entryId}.jpg` || !signed.uploadUrl) throw Object.assign(new Error('Pool retry protocol unavailable'), { permanent: true });
-      if (job.entryId && (job.entryId !== signed.entryId || job.key !== signed.key)) throw Object.assign(new Error('Pool identity changed'), { permanent: true });
-      job.entryId = signed.entryId; job.key = signed.key; save(job);
-      await request(signed.uploadUrl, { method: 'PUT', body: Buffer.from(job.photoBase64, 'base64'), contentType: 'image/jpeg', timeout: 20 * 60_000, throttle: true });
-      job.phase = 'uploaded'; save(job);
-    }
-    const result = await call('/api/booth/pool/join', { ...identity, entryId: job.entryId, portraitKey: job.key, seed: job.seed });
-    if (result.ok !== true || result.entryId !== job.entryId) throw Object.assign(new Error('Pool identity mismatch'), { permanent: true });
-    // Receipt replaces sensitive payload before success is considered final.
+    // Earlier pending/uploaded checkpoints still retain the original JPEG.
+    // Protocol 2 revalidates them at the relay; a committed identity is
+    // acknowledged without rewriting its published bytes.
+    const identity = { retryVersion: 2, code: job.code, sessionId: job.sessionId, seed: job.seed, photoDigest: job.digest };
+    const result = await request(`${relayUrl}/api/booth/pool/upload`, {
+      auth: true, identity, body: Buffer.from(job.photoBase64, 'base64'), contentType: 'image/jpeg',
+      timeout: 20 * 60_000, throttle: true,
+    });
+    if (result.ok !== true || result.entryId !== job.id.slice(0, 16) || result.publicationVersion !== 2) throw Object.assign(new Error('Pool publication protocol mismatch'), { permanent: true });
     save({ id: job.id, digest: job.digest, seed: job.seed, phase: 'done', deliveredAt: now() });
     event('Pool portrait delivered; local bytes removed');
   }
@@ -131,6 +139,11 @@ function createPoolQueue({ directory = path.join(__dirname, 'pool-queue'), relay
         try { await deliver(job); }
         catch (err) {
           if (stopped) break;
+          if (err.withdrawn === true) {
+            try { save({ id: job.id, digest: job.digest, seed: job.seed, phase: 'withdrawn', deliveredAt: now() }); event('Withdrawn pool portrait removed from local queue'); }
+            catch { event('Withdrawn portrait cleanup requires operator attention'); }
+            continue;
+          }
           job.attempts++; job.nextAttemptAt = now() + delayFor(job.attempts);
           if (err.permanent || (err.status >= 400 && err.status < 500 && ![403,408,429].includes(err.status))) { job.phase = 'blocked'; job.reason = 'permanent'; }
           try { save(job); } catch { /* previous checkpoint remains recoverable */ }

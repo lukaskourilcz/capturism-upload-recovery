@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { fork } from 'node:child_process';
 import diagnosticsModule from './candidate/diagnostics.cjs';
 import poolRetry from './candidate/capturism-relay/pool-retry.cjs';
+import publicationModule from './candidate/capturism-relay/pool-publication.cjs';
+import { localPoolStorage, poolCommands } from './local-pool-store.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 export const presets = {
@@ -102,6 +104,21 @@ export class Simulator {
       await writeFile(join(dir, `pool-${entry.id}.json`), JSON.stringify(entry));
       this.event('pool-persist', 'Synthetic pool record durably saved');
     } });
+    run.protectedStorage = localPoolStorage(join(dir, 'protected-pool'), {
+      beforePut: async input => {
+        if (input.Key.startsWith('pool/') && JSON.parse(input.Body.toString()).status === 'active' && ['idle_join','idle_persist'].includes(run.scenario) && !run.faults.has('protected.commit')) {
+          run.faults.add('protected.commit'); this.event('idle-fault', 'Injected protected pool publication failure'); throw new Error('Simulated pool persistence failure');
+        }
+      },
+      onPut: (key, bytes) => {
+        if (key.startsWith('pool-portraits/')) this.event('put-done', 'Protected pool portrait stored once', { key, bytes: bytes.length });
+        if (key.startsWith('pool/') && JSON.parse(bytes.toString()).status === 'active') this.event('pool-persist', 'Protected pool record published');
+      },
+    });
+    run.publication = publicationModule.createPublicationStore({ client: run.protectedStorage, bucket: 'local-only', commands: poolCommands,
+      onPublished: entry => { run.pool[entry.id] = { portraitKey: entry.portraitKey }; },
+      onWithdrawn: id => { delete run.pool[id]; },
+    });
     this.uplink = new Uplink(Math.max(1, cfg.kbps - cfg.contention) * 1024);
     this.event('run', cfg.label);
     if (scenario.startsWith('idle_')) this.event('idle-model', 'Injected first-use fault after modeled 2-hour idle; no Windows/Chrome idle is emulated');
@@ -172,6 +189,32 @@ export class Simulator {
     if (p === '/lab/report') return json(res, 200, await this.snapshot());
     if (!this.run) return json(res, 503, { error: 'Start a local scenario first' });
     const run = this.run, generation = this.generation;
+    if (p === '/lab/pool-withdraw' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req, 4096));
+      await run.publication.withdraw(body.entryId); this.event('pool-withdrawn', 'Synthetic pool entry withdrawn');
+      return json(res, 200, { ok: true });
+    }
+    if (p === '/api/booth/pool/upload' && req.method === 'POST') {
+      let publicationIdentity;
+      try {
+        if (!(await this.cloudReady(res)) || this.fault('pool.sign', res)) { req.resume(); return; }
+        const data = JSON.parse(Buffer.from(req.headers['x-pool-upload'] || '', 'base64').toString('utf8'));
+        const identity = run.publication.identify('local-twin', data); publicationIdentity = identity;
+        const state = await run.publication.reserve(identity, () => {});
+        if (['active','retired'].includes(state.data.status)) { req.resume(); return json(res, 200, { ok: true, entryId: identity.id, publicationVersion: 2 }); }
+        if (this.fault('pool.put', res)) { req.resume(); return; }
+        this.event('put-start', `pool-portraits/${identity.id}.jpg`);
+        const controller = new AbortController(); res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+        const chunks = []; let bytes = 0;
+        for await (const chunk of req) {
+          bytes += chunk.length; if (bytes > publicationModule.MAX_PHOTO) throw Object.assign(new Error('Too large'), { status: 413 });
+          await this.uplink.transfer(chunk.length, controller.signal); chunks.push(chunk);
+        }
+        const entry = await run.publication.publish(identity, Buffer.concat(chunks), () => ({ ...identity, portraitKey: `pool-portraits/${identity.id}.jpg`, status: 'active', distributions: [], distributionCount: 0 }));
+        if (run.scenario === 'idle_ack' && !run.faults.has('protected.ack')) { run.faults.add('protected.ack'); this.event('idle-fault', 'Protected pool saved; response lost'); res.destroy(); return; }
+        return json(res, 200, { ok: true, entryId: entry.id, publicationVersion: 2 });
+      } catch (err) { req.resume(); return json(res, err.status || 503, { error: 'Protected pool publication unavailable', ...(err.status === 410 && publicationIdentity ? { withdrawn: true, entryId: publicationIdentity.id, publicationVersion: 2 } : {}) }); }
+    }
     if (p === '/api/pool-queue' && req.method === 'POST') {
       if (!this.workerPort) return json(res, 503, { error: 'Local bridge stopped' });
       const body = await readBody(req);

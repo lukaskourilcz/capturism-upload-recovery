@@ -71,6 +71,36 @@ test('durable worker recovers every idle fault without duplicate entries or lost
       clock += 25 * 3600000; await queue.tick(); assert.equal(queue.status()[0].phase, 'blocked');
       const job = JSON.parse(await readFile(join(directory, (await readdir(directory))[0]), 'utf8')); assert.ok(job.photoBase64);
     });
+    await t.test('stale pending backup is cancelled after withdrawal and local sensitive bytes are scrubbed', async () => {
+      await twin.simulator.start({ scenario: 'normal' });
+      const directory = join(root, 'withdrawn-queue');
+      const options = { directory, relayUrl: twin.baseUrl, boothId: 'local-twin', boothKey: 'local-only', bytesPerSecond: 1024 * 1024 };
+      const queue = queueModule.createPoolQueue(options), body = payload('withdrawn-backup'); queue.enqueue(body);
+      const file = join(directory, (await readdir(directory))[0]), backup = await readFile(file, 'utf8');
+      await queue.tick(); assert.equal(queue.status()[0].phase, 'done');
+      const id = Object.keys(twin.simulator.run.pool)[0];
+      const res = await fetch(twin.baseUrl + '/lab/pool-withdraw', { method: 'POST', body: JSON.stringify({ entryId: id }) }); assert.equal(res.status, 200);
+      await writeFile(file, backup);
+      const restarted = queueModule.createPoolQueue(options); await restarted.tick();
+      assert.equal(restarted.status()[0].phase, 'withdrawn');
+      const receipt = JSON.parse(await readFile(file, 'utf8')); assert.equal(receipt.photoBase64, undefined); assert.equal(receipt.code, undefined);
+      assert.equal(Object.keys(twin.simulator.run.pool).length, 0);
+      assert.throws(() => restarted.enqueue(body), e => e.status === 410);
+    });
+    await t.test('old uploaded checkpoints migrate through v2 without a new identity or duplicate', async () => {
+      await twin.simulator.start({ scenario: 'normal' });
+      const directory = join(root, 'old-uploaded');
+      const options = { directory, relayUrl: twin.baseUrl, boothId: 'local-twin', boothKey: 'local-only', bytesPerSecond: 1024 * 1024 };
+      const queue = queueModule.createPoolQueue(options), body = payload('old-uploaded'); queue.enqueue(body);
+      const file = join(directory, (await readdir(directory))[0]), pending = JSON.parse(await readFile(file, 'utf8'));
+      pending.phase = 'uploaded'; pending.entryId = pending.id.slice(0, 16); pending.key = `pool-portraits/${pending.entryId}.jpg`;
+      await writeFile(file, JSON.stringify(pending));
+      const restarted = queueModule.createPoolQueue(options); await restarted.tick();
+      assert.equal(restarted.status()[0].phase, 'done');
+      assert.deepEqual(Object.keys(twin.simulator.run.pool), [pending.entryId]);
+      assert.equal(restarted.enqueue(body).delivered, true);
+      assert.equal(twin.simulator.events.filter(e => e.stage === 'pool-persist').length, 1);
+    });
   } finally { await twin.close(); await rm(root, { recursive: true, force: true }); }
 });
 
@@ -127,4 +157,17 @@ test('actual browser handoff retries a lost local ACK and survives browser disap
     global.fetch = oldFetch; global.Image = oldImage; global.document = oldDocument; global.FileReader = oldReader;
     await twin.close(); await rm(root, { recursive: true, force: true });
   }
+});
+
+test('generic HTTP 410 never erases an acknowledged portrait', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => { req.resume(); res.writeHead(410); res.end('Generic gateway error'); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const directory = await mkdtemp(join(tmpdir(), 'capturism-gone-'));
+  try {
+    const queue = queueModule.createPoolQueue({ directory, relayUrl: `http://127.0.0.1:${server.address().port}`, boothId: 'local', boothKey: 'local' });
+    const body = payload('generic-gone'); queue.enqueue(body); await queue.tick();
+    assert.equal(queue.status()[0].phase, 'blocked');
+    const job = JSON.parse(await readFile(join(directory, (await readdir(directory))[0]), 'utf8')); assert.equal(job.photoBase64, body.photoBase64);
+  } finally { server.closeAllConnections(); await new Promise(r => server.close(r)); await rm(directory, { recursive: true, force: true }); }
 });

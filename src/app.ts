@@ -127,7 +127,8 @@ async function refresh() {
     if (!s.run) return;
     input('bridge').disabled = false;
     if (started) $('elapsed').textContent = `${Math.floor((Date.now() - started) / 1000)}s elapsed`;
-    if (s.poolQueue?.some(q => q.phase === 'done')) $('pool-status').textContent = 'Pool portrait: delivered from durable queue.';
+    if (s.poolQueue?.some(q => q.phase === 'withdrawn')) $('pool-status').textContent = 'Pool portrait: withdrawn; local portrait removed.';
+    else if (s.poolQueue?.some(q => q.phase === 'done')) $('pool-status').textContent = 'Pool portrait: delivered from durable queue.';
     else if (s.poolQueue?.some(q => ['blocked','corrupt'].includes(q.phase))) $('pool-status').textContent = 'Pool portrait: retained locally; operator attention required.';
     else if (s.poolQueue?.some(q => ['pending','uploaded'].includes(q.phase))) $('pool-status').textContent = 'Pool portrait: saved locally; bridge will resume delivery.';
     $('queue-count').textContent = `${s.queue.length} waiting`;

@@ -11,8 +11,8 @@
  *
  * Persistence — one R2 object per record, mirrored in memory (same pattern
  * as reviewPipeline.js):
- *   pool/<id>.json            — the entry record (see shape below)
- *   pool-portraits/<id>.jpg   — the portrait (uploaded via presigned PUT)
+ *   pool/<id>.json            — conditional reservation / entry / tombstone
+ *   pool-portraits/<id>.jpg   — create-only portrait written by the relay
  *   pool-matches/<id>.json    — append-only match log
  *
  * ⚠️ These prefixes are deliberately OUTSIDE sessions/ — that prefix has a
@@ -32,9 +32,8 @@
  * pool entry can never exist without a consented quiz submission — strict
  * reciprocity is structural, not a UI promise.
  *
- * GDPR: deletion (deleteEntry) is REAL — both R2 objects are removed and the
- * in-memory entry dropped. Triggered manually from the admin dashboard when
- * someone emails paris@capturism.com.
+ * Withdrawal scrubs the personal record and portrait. A minimal canonical
+ * tombstone and deletion marker remain to fence delayed/restarted writers.
  *
  * Config (env, all optional):
  *   POOL_MAX_DISTRIBUTIONS      default 3 — entry retires after N handouts
@@ -47,14 +46,13 @@
 "use strict";
 
 const crypto = require("crypto");
-const { uploadIdentity, createJoinCoordinator } = require("./pool-retry.cjs");
+const { createPublicationStore, collect, MAX_PHOTO } = require("./pool-publication.cjs");
 const {
   PutObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   DeleteObjectCommand,
 } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const quiz = require("./quiz");
 const backup = require("./backup");
 
@@ -65,14 +63,7 @@ const REQUIRE_OPTIN_TO_RECEIVE = process.env.POOL_REQUIRE_OPTIN_TO_RECEIVE !== "
 const MATCH_FLOOR = Number(process.env.POOL_MATCH_FLOOR || 3);
 
 const ENTRY_PREFIX = "pool/";
-const PORTRAIT_PREFIX = "pool-portraits/";
 const MATCH_PREFIX = "pool-matches/";
-const SIGNED_UPLOAD_TTL_S = 300;
-
-const PORTRAIT_CONTENT_TYPES = new Map([
-  ["image/jpeg", "jpg"],
-  ["image/png", "png"],
-]);
 
 // Injected once from server.js via init()
 let r2Client = null;
@@ -89,7 +80,8 @@ function ensureHydrated() {
   if (!hydrationPromise) hydrationPromise = hydrate().then(ok => { hydrated = ok; return ok; }).finally(() => { hydrationPromise = null; });
   return hydrationPromise;
 }
-const joinOnce = createJoinCoordinator({ entries, persist: entry => persistEntry(entry, true) });
+let publication;
+let incomingUploads = 0;
 
 // ── Public API ──────────────────────────────────────────────────────
 
@@ -97,6 +89,7 @@ const joinOnce = createJoinCoordinator({ entries, persist: entry => persistEntry
 function init({ client, bucket, jsonResponse: jsonFn, readBody: readFn }) {
   r2Client = client;
   R2_BUCKET = bucket;
+  publication = createPublicationStore({ client, bucket, commands: { GetObjectCommand, PutObjectCommand, DeleteObjectCommand }, onPublished: entry => entries.set(entry.id, entry), onWithdrawn: id => entries.delete(id) });
   jsonResponse = jsonFn;
   readBody = readFn;
   console.log(
@@ -113,111 +106,52 @@ function activeCount() {
 
 // ── Booth endpoints (auth done by caller in server.js) ──────────────
 
-/**
- * POST /api/booth/pool/sign-upload — body { contentType }
- * Mints an entry id + presigned PUT for the portrait. The entry itself is
- * only created by /join; an uploaded portrait with no join is inert junk.
- */
-function handleSignUpload(req, res, boothId) {
-  if (!r2Client) return jsonResponse(res, 500, { error: "Storage not configured" });
-  readBody(req, async (body) => {
-    let data;
-    try { data = JSON.parse(body); }
-    catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
-    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected JSON object" });
+// Direct write URLs from the earlier protocols cannot be safely revoked.
+// New delivery must pass through the authenticated, fenced relay path.
+function handleSignUpload(req, res) { req.resume?.(); return jsonResponse(res, 426, { error: "Pool publication protocol 2 required" }); }
+function handlePoolJoin(req, res) { req.resume?.(); return jsonResponse(res, 426, { error: "Pool publication protocol 2 required" }); }
 
-    if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
-    if (data.retryVersion === 1 && data.contentType !== "image/jpeg") return jsonResponse(res, 400, { error: "Retry uploads require JPEG" });
-    const ext = PORTRAIT_CONTENT_TYPES.get(data.contentType);
-    if (!ext) return jsonResponse(res, 400, { error: "Unsupported contentType" });
-
-    let entryId;
-    if (data.retryVersion === 1) {
-      const record = quiz.getRecordByCode(data.code);
-      if (!record || record.status !== "redeemed" || (record.redeemedBy && record.redeemedBy !== boothId)) return jsonResponse(res, 400, { error: "No redeemed quiz record" });
-      try { entryId = uploadIdentity(boothId, data.sessionId, data.code); }
-      catch { return jsonResponse(res, 400, { error: "Invalid pool upload identity" }); }
-    } else entryId = crypto.randomBytes(8).toString("hex");
-    const key = `${PORTRAIT_PREFIX}${entryId}.${ext}`;
-    try {
-      const uploadUrl = await getSignedUrl(
-        r2Client,
-        new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, ContentType: data.contentType }),
-        { expiresIn: SIGNED_UPLOAD_TTL_S },
-      );
-      console.log(`[pool] signed portrait upload for ${boothId} → ${key}`);
-      jsonResponse(res, 200, { entryId, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S, retryVersion: data.retryVersion === 1 ? 1 : undefined });
-    } catch (err) {
-      console.error(`[pool] sign-upload failed: ${err.message}`);
-      jsonResponse(res, 500, { error: "Failed to sign upload URL" });
-    }
-  });
+function consentRecord(code, boothId) {
+  const record = quiz.getRecordByCode(code);
+  if (!record || record.status !== "redeemed" || (record.redeemedBy && record.redeemedBy !== boothId)) throw Object.assign(new Error("No redeemed quiz record"), { status: 400 });
+  return record;
 }
-
-/**
- * POST /api/booth/pool/join — create the entry after the portrait PUT and
- * the FINAL in-studio confirmation.
- * Body: { entryId, portraitKey, code, sessionId, seed? }
- * Identity + answers + consents come from the redeemed quiz record (looked
- * up by code server-side) — never from the kiosk payload.
- */
-function handlePoolJoin(req, res, boothId) {
-  if (!r2Client) return jsonResponse(res, 500, { error: "Storage not configured" });
-  readBody(req, async (body) => {
-    let data;
-    try { data = JSON.parse(body); }
-    catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
-    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected JSON object" });
-
-    if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
-    const entryId = typeof data.entryId === "string" && /^[a-f0-9]{16}$/.test(data.entryId)
-      ? data.entryId : null;
-    const portraitKey = typeof data.portraitKey === "string" && data.portraitKey.startsWith(PORTRAIT_PREFIX)
-      ? data.portraitKey : null;
-    if (!entryId || !portraitKey) return jsonResponse(res, 400, { error: "Missing entryId/portraitKey" });
-    if (data.retryVersion !== 1 && entries.has(entryId)) return jsonResponse(res, 409, { error: "Entry already exists" });
-
-    const record = quiz.getRecordByCode(data.code);
-    if (!record || record.status !== "redeemed" || (record.redeemedBy && record.redeemedBy !== boothId)) {
-      return jsonResponse(res, 400, { error: "No redeemed quiz record for this code" });
+async function handlePoolUpload(req, res, boothId) {
+  const reply = (status, body) => { if (!res.destroyed && !res.writableEnded) jsonResponse(res, status, body); };
+  if (!publication || !r2Client) return reply(503, { error: "Pool storage unavailable" });
+  if (incomingUploads >= 2) { req.resume?.(); return reply(429, { error: "Pool uploads busy" }); }
+  incomingUploads++;
+  let timer, identity;
+  try {
+    const encoded = req.headers?.['x-pool-upload'];
+    if (typeof encoded !== 'string' || encoded.length > 2048 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw Object.assign(new Error("Invalid upload metadata"), { status: 400 });
+    const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+    identity = publication.identify(boothId, data);
+    if (!(await ensureHydrated())) throw Object.assign(new Error("Pool storage not ready"), { status: 503 });
+    const reserved = await publication.reserve(identity, () => consentRecord(data.code, boothId));
+    if (['active','retired'].includes(reserved.data.status)) {
+      req.resume?.();
+      return reply(200, { ok: true, entryId: identity.id, publicationVersion: 2 });
     }
-
-    if (data.retryVersion === 1) {
-      let expected;
-      try { expected = uploadIdentity(boothId, data.sessionId, data.code); }
-      catch { return jsonResponse(res, 400, { error: "Invalid pool upload identity" }); }
-      if (entryId !== expected || portraitKey !== `${PORTRAIT_PREFIX}${entryId}.jpg`) return jsonResponse(res, 409, { error: "Pool upload identity conflict" });
-    }
-    const entry = {
-      id: entryId,
-      boothId,
-      firstName: record.firstName,
-      handle: record.handle,
-      answers: record.answers,
-      sessionId: String(data.sessionId || ""),
-      language: record.language,
-      seed: data.seed === true,
-      portraitKey,
-      createdAt: new Date().toISOString(),
-      ageConfirmed: record.ageConfirmed === true,
-      marketingConsent: record.marketingConsent === true,
-      consent: {
-        ...record.consent,
-        confirmedInStudioAt: new Date().toISOString(),
-      },
-      distributionCount: 0,
-      distributions: [],
-      status: "active",
-    };
-    try {
-      if (data.retryVersion === 1) await joinOnce(entry);
-      else { await persistEntry(entry, true); entries.set(entry.id, entry); }
-    } catch (err) {
-      return jsonResponse(res, err.status === 409 ? 409 : 503, { error: err.status === 409 ? "Pool upload identity conflict" : "Pool entry not saved; retry confirmation" });
-    }
-    console.log(`[pool] joined: ${entry.firstName} (@${entry.handle}) — ${activeCount()} active`);
-    jsonResponse(res, 200, { ok: true, entryId: entry.id, activeCount: activeCount() });
-  });
+    timer = setTimeout(() => req.destroy(new Error('Pool upload deadline')), 20 * 60_000);
+    const bytes = await collect(req, MAX_PHOTO);
+    const entry = await publication.publish(identity, bytes, () => {
+      const record = consentRecord(data.code, boothId);
+      return {
+        id: identity.id, boothId, sessionId: data.sessionId, seed: data.seed,
+        portraitKey: `pool-portraits/${identity.id}.jpg`, firstName: record.firstName,
+        handle: record.handle, answers: record.answers, language: record.language,
+        createdAt: new Date().toISOString(), ageConfirmed: record.ageConfirmed === true,
+        marketingConsent: record.marketingConsent === true,
+        consent: { ...record.consent, confirmedInStudioAt: new Date().toISOString() },
+        distributionCount: 0, distributions: [], status: 'active',
+      };
+    });
+    reply(200, { ok: true, entryId: entry.id, publicationVersion: 2 });
+  } catch (err) {
+    req.resume?.();
+    reply(err.name === 'SyntaxError' ? 400 : [400,409,410,413,422].includes(err.status) ? err.status : 503, { error: err.status === 410 ? "Pool entry withdrawn" : "Pool publication rejected or unavailable", ...(err.status === 410 && identity ? { withdrawn: true, entryId: identity.id, publicationVersion: 2 } : {}) });
+  } finally { clearTimeout(timer); incomingUploads--; }
 }
 
 /**
@@ -245,11 +179,16 @@ function handlePoolMatch(req, res, boothId) {
       return jsonResponse(res, 200, { match: null, reason: "empty_pool" });
     }
 
-    const { entry, score, sharedAnswers } = picked;
+    const { entry: selected, score, sharedAnswers } = picked;
+    const entry = { ...selected, distributions: [...selected.distributions] };
     entry.distributionCount += 1;
     entry.distributions.push({ sessionId, score, at: new Date().toISOString() });
     if (entry.distributionCount >= MAX_DISTRIBUTIONS) entry.status = "retired";
-    await persistEntry(entry);
+    try { await persistEntry(entry, true); }
+    catch {
+      try { const live = await publication.lookup(entry.id); if (live && ['active','retired'].includes(live.data.status)) entries.set(entry.id, live.data); else entries.delete(entry.id); } catch { /* keep the unmodified cached record, but do not return a match */ }
+      return jsonResponse(res, 503, { error: "Pool entry unavailable" });
+    }
     void logMatch({ boothId, entryId: entry.id, visitorSessionId: sessionId, score, sharedAnswers });
 
     console.log(
@@ -289,10 +228,12 @@ async function streamPortrait(req, res, entryId) {
   if (!entry) return jsonResponse(res, 404, { error: "Unknown entry" });
   if (!r2Client) return jsonResponse(res, 500, { error: "Storage not configured" });
   try {
-    const r = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: entry.portraitKey }));
+    const current = await publication.lookup(entry.id);
+    if (!current || !['active','retired'].includes(current.data.status)) { entries.delete(entry.id); return jsonResponse(res, 410, { error: "Pool entry unavailable" }); }
+    const r = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: current.data.portraitKey }));
     res.writeHead(200, {
       "Content-Type": r.ContentType || "image/jpeg",
-      "Cache-Control": "private, max-age=3600",
+      "Cache-Control": "private, no-store",
       "Access-Control-Allow-Origin": "*",
       ...(r.ContentLength ? { "Content-Length": r.ContentLength } : {}),
     });
@@ -310,7 +251,15 @@ async function streamPortrait(req, res, entryId) {
 // ── Admin endpoints (JWT verified by caller in server.js) ───────────
 
 /** GET /api/admin/pool — full list (minus portraits) + stats. */
-function handleAdminList(req, res) {
+async function handleAdminList(req, res) {
+  try {
+    if (!(await ensureHydrated())) throw new Error('Pool unavailable');
+    for (const id of [...entries.keys()]) {
+      const current = await publication.lookup(id);
+      if (current && ['active','retired'].includes(current.data.status)) entries.set(id, current.data);
+      else entries.delete(id);
+    }
+  } catch { return jsonResponse(res, 503, { error: "Pool listing unavailable" }); }
   const list = [...entries.values()]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
     .map((e) => ({
@@ -358,34 +307,28 @@ function handleAdminList(req, res) {
 
 /**
  * POST /api/admin/pool/delete — body { entryId } or { handle }.
- * REAL deletion: portrait object + record object + memory. This is the
- * GDPR withdrawal path — a soft flag is not acceptable here.
+ * Scrubs the personal record and portrait; retains only a minimal fence.
  */
 function handleAdminDelete(req, res) {
-  readBody(req, async (body) => {
+  readBody(req, async body => {
     let data;
     try { data = JSON.parse(body); }
     catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
-
-    let entry = null;
-    if (data.entryId) entry = entries.get(String(data.entryId));
-    else if (data.handle) {
-      const h = normalizeHandle(data.handle);
-      entry = [...entries.values()].find((e) => e.handle === h) || null;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected object" });
+    let id = data.entryId;
+    if (!id && data.handle) {
+      const handle = normalizeHandle(data.handle);
+      id = [...entries.values()].find(entry => entry.handle === handle)?.id;
     }
-    if (!entry) return jsonResponse(res, 404, { error: "Entry not found" });
-
+    if (typeof id !== 'string' || !/^[a-f0-9]{16}$/.test(id)) return jsonResponse(res, 404, { error: "Entry not found" });
     try {
-      await deleteEntry(entry);
-      // Amendment 2 §1: log the deletion EVENT — date + entry id only.
-      // Deliberately no name/handle anywhere (including this console line):
-      // after a withdrawal, no personal data may survive in any log.
-      void logDeletion(entry.id);
-      console.log(`[pool] DELETED entry ${entry.id} — withdrawal`);
-      jsonResponse(res, 200, { ok: true, deleted: entry.id });
-    } catch (err) {
-      console.error(`[pool] delete failed for ${entry.id}: ${err.message}`);
-      jsonResponse(res, 500, { error: "Deletion failed — entry NOT fully removed, retry" });
+      await publication.withdraw(id);
+      entries.delete(id);
+      return jsonResponse(res, 200, { ok: true, deleted: id });
+    } catch {
+      // Tombstone may already be committed even when byte cleanup failed.
+      entries.delete(id);
+      return jsonResponse(res, 503, { error: "Withdrawal incomplete; retry and verify cleanup" });
     }
   });
 }
@@ -472,41 +415,8 @@ function sanitizeAnswers(raw) {
 // ── R2 persistence ──────────────────────────────────────────────────
 
 async function persistEntry(entry, strict = false) {
-  if (!r2Client) { if (strict) throw new Error("Storage not configured"); return; }
-  try {
-    await r2Client.send(new PutObjectCommand({
-      Bucket: R2_BUCKET,
-      Key: `${ENTRY_PREFIX}${entry.id}.json`,
-      Body: JSON.stringify(entry),
-      ContentType: "application/json",
-    }));
-  } catch (err) {
-    console.error(`[pool] R2 persist failed for ${entry.id}: ${err.message}`);
-    if (strict) throw err;
-  }
-}
-
-async function deleteEntry(entry) {
-  // Portrait first: if this throws, the record survives and the admin can
-  // retry; the reverse order could orphan an unfindable portrait.
-  await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: entry.portraitKey }));
-  await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: `${ENTRY_PREFIX}${entry.id}.json` }));
-  entries.delete(entry.id);
-}
-
-/** Withdrawal audit trail: { entryId, deletedAt } — nothing else, ever. */
-async function logDeletion(entryId) {
-  if (!r2Client) return;
-  try {
-    await r2Client.send(new PutObjectCommand({
-      Bucket: R2_BUCKET,
-      Key: `pool-deletions/${entryId}.json`,
-      Body: JSON.stringify({ entryId, deletedAt: new Date().toISOString() }),
-      ContentType: "application/json",
-    }));
-  } catch (err) {
-    console.error(`[pool] deletion log failed for ${entryId}: ${err.message}`);
-  }
+  try { if (!publication) throw new Error('Storage unavailable'); await publication.update(entry); }
+  catch (err) { if (strict) throw err; console.error('[pool] metadata update unavailable'); }
 }
 
 async function logMatch(match) {
@@ -542,7 +452,14 @@ async function hydrate() {
         try {
           const got = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: obj.Key }));
           const entry = JSON.parse(await got.Body.transformToString());
-          if (entry && entry.id) entries.set(entry.id, entry);
+          if (entry && entry.id) {
+            if (entry.status === 'withdrawn') { entries.delete(entry.id); await publication.withdraw(entry.id); }
+            else if (['active','retired'].includes(entry.status)) {
+              const live = await publication.lookup(entry.id);
+              if (live && live.data.status !== 'withdrawn') entries.set(entry.id, live.data);
+              else { entries.delete(entry.id); await publication.withdraw(entry.id); }
+            }
+          }
         } catch (err) {
           console.error(`[pool] hydrate skip ${obj.Key}: ${err.message}`);
           failed = true;
@@ -560,6 +477,7 @@ async function hydrate() {
 
 module.exports = {
   init,
+  handlePoolUpload,
   handleSignUpload,
   handlePoolJoin,
   handlePoolMatch,

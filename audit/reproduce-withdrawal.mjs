@@ -1,16 +1,13 @@
-// Audit reproduction, intentionally demonstrates an unresolved release blocker.
-// Only in-memory provider replacements and synthetic data are used.
+// Regression check for the two previously reproduced blockers. Local fixtures only.
 import assert from 'node:assert/strict';
-import { makeRelay, storage, call, payload, identity } from '../test/helpers/relay-fixture.mjs';
-const store = storage(), relay = makeRelay(store), body = await payload(relay);
-assert.equal((await call(relay, 'handlePoolJoin', body)).status, 200);
-const resigned = await call(relay, 'handleSignUpload', identity);
-console.log(JSON.stringify({ existingEntryGetsAnotherPutUrl: !!resigned.body.uploadUrl, samePortraitKey: resigned.body.key === body.portraitKey }));
-assert.equal((await call(relay, 'handleAdminDelete', { entryId: body.entryId })).status, 200);
-await new Promise(r => setTimeout(r, 20));
-assert.equal(store.objects.has(`pool/${body.entryId}.json`), false);
-assert.equal(store.objects.has(`pool-deletions/${body.entryId}.json`), true);
-const replay = await call(relay, 'handlePoolJoin', body);
-console.log(JSON.stringify({ replayStatus: replay.status, recordRecreated: store.objects.has(`pool/${body.entryId}.json`), deletionMarkerStillPresent: store.objects.has(`pool-deletions/${body.entryId}.json`) }, null, 2));
-assert.equal(replay.status, 200);
-assert.equal(store.objects.has(`pool/${body.entryId}.json`), true);
+import { makeRelay, storage, call, identity, upload, uploadId } from '../test/helpers/relay-fixture.mjs';
+const store = storage(), relay = makeRelay(store);
+assert.equal((await upload(relay)).status, 200);
+const sign = await call(relay, 'handleSignUpload', identity);
+assert.equal(sign.status, 426); assert.equal(sign.body.uploadUrl, undefined);
+assert.equal((await call(relay, 'handleAdminDelete', { entryId: uploadId() })).status, 200);
+assert.equal((await upload(relay)).status, 410);
+assert.equal((await upload(makeRelay(store))).status, 410);
+assert.equal(store.objects.has(`pool-portraits/${uploadId()}.jpg`), false);
+assert.equal(JSON.parse(store.objects.get(`pool/${uploadId()}.json`)).status, 'withdrawn');
+console.log(JSON.stringify({ publishedWriteUrlsIssued: false, replayStatus: 410, restartReplayStatus: 410, portraitAbsent: true, canonicalTombstonePreserved: true }, null, 2));
