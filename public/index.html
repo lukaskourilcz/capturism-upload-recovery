@@ -6,6 +6,7 @@
   <section class="intro"><p class="eyebrow">STUDIO DIAGNOSTICS</p><h1>Follow the photo.<br>Find the hold-up.</h1><p>Run the studio’s upload code against local services.<br>Change the connection, watch the queue, and see when the QR becomes ready.</p></section>
   <div class="workspace">
     <aside class="panel controls"><h2>Set the scene</h2>
+      <label for="implementation">Upload version</label><select id="implementation"><option value="baseline">Original studio code</option><option value="candidate">Local fix candidate</option></select>
       <label for="scenario">Connection scenario</label><select id="scenario"><option value="normal">Healthy connection</option><option value="studio">Slow studio connection · ~1 Mbps</option><option value="congested">Slow + competing traffic</option><option value="cold">Relay waking up · 55 seconds</option><option value="offline">Offline for 20 seconds</option><option value="confirm">Confirmation fails five times</option></select>
       <div class="pair"><div><label for="size">Test photo (MiB)</label><input id="size" type="number" min="0.1" max="16" step="0.1" value="1"></div><div><label for="reset">Reset after (seconds)</label><input id="reset" type="number" min="1" max="900" value="300"></div></div>
       <label for="composition">Preparation delay (seconds)</label><input id="composition" type="number" min="0" max="600" value="0"><p class="hint">Models time before upload starts. Photo rendering and video composition are not reproduced here.</p>

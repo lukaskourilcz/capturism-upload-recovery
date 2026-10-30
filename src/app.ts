@@ -20,7 +20,12 @@ for (const method of ['log', 'warn'] as const) {
   const original = console[method].bind(console);
   console[method] = (...args) => { original(...args); if (String(args[0]).startsWith('[UPLOAD]')) void log(args.map(String).join(' ')); };
 }
-const uploader = await import('../vendor/relayUpload');
+const baseline = await import('../vendor/relayUpload');
+const candidate = await import('../candidate/capturism-app/src/lib/relayUpload');
+import { qrInactivityDelay } from '../candidate/capturism-app/src/lib/qrWaitPolicy';
+let uploader = baseline;
+let scanWindowMs = 300_000;
+let fixedRun = false;
 let busy = false, started = 0, ended = false, qrReady = false, timer: ReturnType<typeof setTimeout>;
 
 function testCanvas() {
@@ -75,9 +80,14 @@ input('start').onclick = async () => {
   for (const el of document.querySelectorAll('.steps>div')) el.classList.remove('done');
   resetSession();
   try {
+    fixedRun = input('implementation').value === 'candidate';
+    uploader = fixedRun ? candidate : baseline;
     await api('/lab/start', { scenario: input('scenario').value }); started = Date.now();
     $('status').textContent = 'Preparing your download…'; $('detail').textContent = 'Waiting for photo upload and confirmation.';
-    timer = setTimeout(endSession, Math.max(1, Math.min(900, Number(input('reset').value) || 300)) * 1000);
+    scanWindowMs = Math.max(1, Math.min(900, Number(input('reset').value) || 300)) * 1000;
+    const waitMs = fixedRun ? qrInactivityDelay({ needsQr: true, hasToken: false, scanWindowMs }) : scanWindowMs;
+    timer = setTimeout(endSession, waitMs);
+    await log(`Version: ${fixedRun ? 'local fix' : 'baseline'}; scan window ${scanWindowMs}ms; pending timeout ${waitMs}ms`);
     const epoch = getSessionEpoch();
     const asset = await photo();
     const video = input('videos').checked ? await clip() : undefined;
@@ -92,6 +102,7 @@ input('start').onclick = async () => {
     $('qr').hidden = false; const link = $<HTMLAnchorElement>('download'); link.href = url; link.hidden = false;
     $('status').textContent = 'Your QR is ready.';
     $('detail').textContent = `Photo confirmed in ${((Date.now() - started) / 1000).toFixed(1)} seconds. Videos continue through the bridge queue.`;
+    if (fixedRun) { clearTimeout(timer); timer = setTimeout(endSession, scanWindowMs); }
     $('step-qr').classList.add('done'); qrReady = true; await log('QR shown after original uploader returned the token');
   } catch (err) {
     $('status').textContent = ended ? 'Late upload safely discarded.' : 'Upload did not complete.';
