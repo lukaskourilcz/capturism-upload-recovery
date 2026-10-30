@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/capturismstudio/capturism",
+  "commit": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "retrieved": "2026-10-30",
+  "files": {
+    "video-queue.cjs": "be91cd13c96151d4c5ae708972d5ee7e94fa2e7f1877ceb464c4c2def615e21a",
+    "video-queue.test.cjs": "db87c2a8a72a6a649d9a8f66c4dead9a2e59b9c849f86536f54cae49bd8237eb",
+    "relayUpload.ts": "1519ca2184f6fae3d4d241ade61aa380b3f70777a05dc9071bbfc2539e4dc000"
+  }
+}
