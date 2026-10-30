@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current verification is in [AUDIT.md](AUDIT.md): 92 twin tests and 27 targeted kiosk tests pass. The [shared deadline and explicit recovery](QR-DEADLINE.md) close the former medium timeout finding locally; protocol-2 pool fixes remain intact. Provider/kiosk/cutover gates remain. The historical timer descriptions and 16-test count below describe the earlier candidate, superseded by the current deadline contract.
+This document records the initial QR experiment. Current verification is in [AUDIT.md](AUDIT.md): 95 twin tests and 27 targeted kiosk tests pass. The final combined review also demonstrates an open relay QR metadata-durability blocker (R3), so this artifact remains on hold. The [shared deadline and explicit recovery](QR-DEADLINE.md) close the former medium timeout finding locally; protocol-2 pool fixes remain intact. Provider/kiosk/cutover gates remain. The historical timer descriptions and 16-test count below describe the earlier candidate, superseded by the current deadline contract.
 
 ## Reproduction
 

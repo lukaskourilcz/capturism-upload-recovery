@@ -1,8 +1,8 @@
-# Complete patch audit — local blockers resolved; release still gated
+# Combined patch audit — HOLD: QR metadata durability blocker
 
 Reviewed against Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Tested implementation: local twin commit `fcac65654230aac26944019306c956f919ffde42` (retaining pool fencing `8f738df` and audit hardening `0dd1d4f`). Combined patch SHA-256: `2da6962e938fba253ffeec5cf565e10fcb2b573119281fe824e797762de26d34`.
 
-**Both demonstrated high-severity pool blockers and the medium QR deadline finding are closed in the local candidate. This is not production release approval.** The fix introduces pool publication protocol 2 and requires a coordinated, quiescent cutover. Existing mutable upload links must be retired before enabling it. No production credentials, customer workflows, device operations, deployment, push or client messages were used.
+**The pool withdrawal/immutability and client QR deadline findings pass locally. One additional release blocker remains: the relay can acknowledge QR metadata that was not durably saved (R3 below).** This is pre-existing baseline behavior exposed by reviewing the complete QR path, not a newly introduced regression. The current artifact is not releasable. No production credentials, customer workflows, device operations, deployment, push or client messages were used. The pool protocol also requires a quiescent cutover and retirement of old mutable upload capabilities.
 
 ## R1 — High: withdrawn entry recreated by replay — resolved locally
 
@@ -32,6 +32,16 @@ Evidence: stalled sign/PUT/confirm and body reads; total-budget backoff; expired
 
 This bounds client waiting and QR publication. Already-accepted provider work may finish after abort; local Chrome also showed delayed server-side cancellation. The retry reconciles with the same identity/bytes. Main-thread freezing cannot be interrupted by JavaScript; deadline/current-session checks still reject a stale result on resumption. Rendering/JPEG/video preparation happens before the network budget and has a separate thank-you-page watchdog with a help state; physical rendering/hardware behavior remains unverified. See [QR deadline contract](QR-DEADLINE.md).
 
+## R3 — High: QR success can precede durable metadata — OPEN release blocker
+
+Trigger: the photo PUT succeeds, but R2 fails the subsequent `sessions/<token>/meta.json` write. `storeSession` installs the session in memory and catches/logs the failed storage write without throwing. `handlePhotosReady` then returns HTTP 200 with `ok: true`. The uploader treats this as success, shows a QR and clears its prepared-photo recovery state. After a relay restart, `loadSession` cannot find the metadata, so the download path loses that session even though its photo object remains stored.
+
+Reproduced using the **actual candidate and baseline** `handlePhotosReady`, `storeSession`, `loadSession` and `handleGetDownload` source, with only authentication/broadcast/storage replaced by isolated fixtures. Both versions return 200/ok, resolve from memory before restart, and return download HTTP 404 after a fresh relay context; the photo still exists and there are zero durable metadata objects. No provider/network calls. Run `node audit/reproduce-qr-persistence.mjs`; evidence: `test-results/final-review-qr-persistence.json`. The script asserts the unsafe behavior and intentionally sits outside the passing regression suite.
+
+Location: `capturism-relay/server.js`, `storeSession` storage catch (candidate lines 1756–1757) and `handlePhotosReady` success response. These control flows are unchanged from the captured baseline. The twin's simplified QR endpoint acknowledges its modeled persistence; it does not execute this production metadata failure path. That fidelity gap is now explicit in the coverage ledger.
+
+Required before release: acknowledge QR confirmation only after the metadata write succeeds; on storage failure return a retryable response so the bounded client retains its same-token/completed-PUT checkpoint. Test failed save, ambiguous save acknowledgement, confirmation replay with existing video fields, relay restart and download resolution from durable state. Preserve the privacy deadline, consent/retention rules and pool-v2 fences. A longer timeout or green client-only tests do not resolve R3. This review leaves production candidate code unchanged and records a concrete follow-up requirement.
+
 ## Earlier audit fixes retained
 
 | Finding | Fix and local evidence |
@@ -43,14 +53,20 @@ This bounds client waiting and QR publication. Already-accepted provider work ma
 
 ## Final local validation
 
-- **92 twin tests passed**, zero failures/skips, approximately 36 seconds; **27 targeted kiosk tests passed** across uploader/probe/privacy/video and recovery UI. Includes original QR/video regressions, five after-idle pool faults, disk/checkpoint recovery, actual bridge SIGKILL, browser disappearance and lost acknowledgements, withdrawal and immutable publication. No tests were suppressed to close these findings. Kiosk jsdom tests on Node 26 used `NODE_OPTIONS=--no-experimental-webstorage` so jsdom owns localStorage; the unmodified baseline persistence assertion passes with that runtime setting.
+Final combined review: snapshot `1dfbabe`, review/evidence `d1ceefc`; production patch remains the `fcac656` implementation and hash recorded above. This review added tests/reproduction evidence and corrected one clock-sensitive test cleanup, with no production-source change.
+
+- **95 twin tests passed**, zero failures/skips, approximately 36 seconds; **27 targeted kiosk tests passed** across uploader/probe/privacy/video and recovery UI. Includes original QR/video regressions, five after-idle pool faults, disk/checkpoint recovery, actual bridge SIGKILL, browser disappearance and lost acknowledgements, withdrawal and immutable publication. No tests were suppressed to close these findings. Kiosk jsdom tests on Node 26 used `NODE_OPTIONS=--no-experimental-webstorage` so jsdom owns localStorage; the unmodified baseline persistence assertion passes with that runtime setting.
 - Earlier protocol-2 Chrome check (`8f738df`): local acceptance → protected pool publication at 16.4 seconds → done receipt at 16.5 seconds; QR at 1.6 seconds. Bridge restarted at 25.4 seconds; read-only state still showed one entry, one publication event and the same done receipt. Synthetic data, healthy local link; not a studio benchmark. Evidence: `test-results/browser-publication-v2.json` and `test-results/publication-v2-browser.png`.
 - Final kiosk overlay passed `tsc -b`, full lint with zero warnings and production Vite build. Twin build and all candidate JavaScript syntax checks passed. Build retains existing large-chunk/mixed-import warnings (main JavaScript about 1.403 MB before gzip) and a Node loader deprecation warning.
-- Regenerated `local-fix.patch` passes `git apply --check` against the captured baseline. No production dependencies or lockfiles changed. The complete relay HTTP server and real provider were not executed; actual pool handlers use injected local S3/quiz replacements with commit-time ETag conditions. Queue tests also use a disk-backed local substitute.
+- The exact `local-fix.patch` applied in a fresh temporary directory reproduces all **21 changed candidate files byte-for-byte**, in addition to `git apply --check` against the captured baseline. No production dependencies or lockfiles changed. The actual HTTP router/authentication boundary was exercised locally with a stub pool handler; full relay startup and real provider behavior were not executed; actual pool handlers use injected local S3/quiz replacements with commit-time ETag conditions. Queue tests also use a disk-backed local substitute.
 - Earlier synthetic backlog measurement remains applicable to local scans: 20 pending 2 MiB portraits (about 53 MiB JSON), three synchronous status scans at **54/51/50 ms** on this Mac. This is not a Windows benchmark. New relay-hop performance and startup reconciliation volume are unmeasured at studio scale.
 - Captured baseline dependency audits remain untriaged: kiosk **14 advisories (1 critical, 11 high, 1 moderate, 1 low)**; relay **6 (3 high, 3 moderate)**. These are registry/lockfile findings, not an exploitability assessment. Saved reports: `test-results/audit-kiosk-dependencies.json`, `test-results/audit-relay-dependencies.json`.
 
 ## Remaining issues and release gates
+
+**R3 is an open code blocker, not merely an environment check.** Fix/review it and regenerate the artifact before any release. The passing 95/27 suites do not include an assertion that current relay QR metadata survives an injected save failure; the separate unsafe reproduction demonstrates the opposite.
+
+**Launcher/update automation must be controlled.** `start-kiosk.bat` and `update-kiosk-auto.bat` switch a non-main/detached checkout to `main`, may stash tracked edits and pull again. A rollback to a detached SHA followed by the stock launcher is therefore not a pin. The revised rollout plan requires verified `main`/artifact alignment or an approved maintenance launcher, plus frozen automatic updates/restarts. Never run these launchers on this Mac as a rehearsal; they are Windows device/process operations.
 
 **Coordinated protocol cutover is mandatory.** Stop legacy writers and settle outstanding published-key presigns before enabling collection. This patch cannot revoke already-issued URLs or protect against old relay code deliberately restored over the new state. Retire the old provider write capability using an authorized, rehearsed maintenance procedure. Do not restore an older pool snapshot over newer tombstones/distributions. Rolling back must retain protocol-2-compatible fences and receipt handling.
 
@@ -58,6 +74,6 @@ Image deletion and metadata publication are not an atomic multi-object transacti
 
 The bridge queue remains single-writer, with durability beginning after local acknowledgement. Do not launch another worker against its folder, clear receipts, re-identify jobs or restore stale backups. Page closure before JPEG handoff, catastrophic disk failure and physical Windows power loss remain outside demonstrated durability. Corrupt/blocked/older-than-24h jobs retain bytes for review; no consent is renewed automatically.
 
-Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. These gates keep production release on hold without reopening the now-passing local pool/QR regressions.
+Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. These gates and R3 keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
 
-See [protocol and failure boundaries](PUBLICATION-FENCING.md), [coverage ledger](AUDIT-COVERAGE.md) and [rollout/rollback plan](ROLLOUT-ROLLBACK.md).
+See the [final combined review](FINAL-REVIEW.md), [protocol and failure boundaries](PUBLICATION-FENCING.md), [coverage ledger](AUDIT-COVERAGE.md) and [rollout/rollback plan](ROLLOUT-ROLLBACK.md).
