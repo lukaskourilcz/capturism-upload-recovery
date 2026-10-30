@@ -98,9 +98,16 @@ test('QR absolute deadline and same-session recovery', async t => {
     });
     await t.test('default legacy path has one two-minute budget and no automatic outer retry', async () => {
       const { client } = await setup(() => new Promise(() => {}));
-      const start = Date.now(), pending = client.uploadSessionToCloud({ photo });
-      assert.ok(client.getQrUploadState().deadlineAt - start <= 120000);
-      const rejected = assert.rejects(pending, /session ended/); client.resetSession(); await rejected;
+      const before = Date.now(), pending = client.uploadSessionToCloud({ photo }), after = Date.now();
+      const rejected = assert.rejects(pending, /session ended/);
+      try {
+        const deadlineAt = client.getQrUploadState().deadlineAt;
+        // Root creation is synchronous but not necessarily in the same
+        // clock millisecond as the caller's first timestamp.
+        assert.ok(deadlineAt >= before + client.DEFAULT_UPLOAD_DEADLINE_MS);
+        assert.ok(deadlineAt <= after + client.DEFAULT_UPLOAD_DEADLINE_MS);
+        assert.equal(client.DEFAULT_UPLOAD_DEADLINE_MS, 120000);
+      } finally { client.resetSession(); await rejected; }
     });
     await t.test('preparation failure exposes studio help without inventing a retry or download URL', async () => {
       const { client } = await setup(); client.expireQrUpload();
