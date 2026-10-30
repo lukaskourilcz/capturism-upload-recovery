@@ -61,6 +61,7 @@ test('actual relay handlers: stable signing, concurrent join and repeat confirma
   assert.equal((await call(relay, 'handlePoolJoin', { ...body, portraitKey: 'pool-portraits/other.jpg' })).status, 409);
   assert.equal((await call(relay, 'handlePoolJoin', body, 'other-booth')).status, 400);
   assert.equal((await call(relay, 'handlePoolJoin', { ...body, code: '999999' })).status, 400);
+  assert.equal((await call(relay, 'handleSignUpload', { ...identity, contentType: 'image/png' })).status, 400);
 });
 
 test('actual relay handlers: failed durable save returns 503 and can be retried', async () => {

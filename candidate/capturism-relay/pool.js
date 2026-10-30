@@ -126,6 +126,7 @@ function handleSignUpload(req, res, boothId) {
     catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
 
     if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
+    if (data.retryVersion === 1 && data.contentType !== "image/jpeg") return jsonResponse(res, 400, { error: "Retry uploads require JPEG" });
     const ext = PORTRAIT_CONTENT_TYPES.get(data.contentType);
     if (!ext) return jsonResponse(res, 400, { error: "Unsupported contentType" });
 

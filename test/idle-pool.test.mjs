@@ -61,7 +61,7 @@ test('real pool client and QR uploader under injected first-use failures after i
       assert.equal(state.events.filter(e => e.stage === 'pool-sign').length, 1);
       assert.equal(state.events.filter(e => e.stage === 'pool-persist').length, 1);
     });
-    for (const boundary of ['sign','put','expired','permanent','exhausted']) await t.test(`pool retry boundary: ${boundary}`, async () => {
+    for (const boundary of ['sign','put','expired','permanent','exhausted','legacy']) await t.test(`pool retry boundary: ${boundary}`, async () => {
       await twin.simulator.start({ scenario: 'normal' });
       const localFetch = global.fetch; let injected = false, joins = 0;
       global.fetch = async (url, init) => {
@@ -74,6 +74,10 @@ test('real pool client and QR uploader under injected first-use failures after i
         const poolPut = u.pathname.startsWith('/storage/') && twin.simulator.run.signed.get(u.pathname.split('/')[2])?.key.startsWith('pool-portraits/');
         if (boundary === 'expired' && poolPut && !injected) { injected = true; return new Response('{}', { status: 403 }); }
         const response = await localFetch(url, init);
+        if (boundary === 'legacy' && u.pathname.endsWith('/pool/sign-upload')) {
+          const body = await response.json(); delete body.retryVersion;
+          return new Response(JSON.stringify(body), { status: 200 });
+        }
         if (!injected && ((boundary === 'sign' && u.pathname.endsWith('/pool/sign-upload')) || (boundary === 'put' && poolPut))) {
           injected = true; await response.arrayBuffer(); throw new TypeError('Injected lost response');
         }
@@ -81,10 +85,10 @@ test('real pool client and QR uploader under injected first-use failures after i
       };
       try {
         const ok = await client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: `boundary-${boundary}`, seed: true });
-        assert.equal(ok, !['permanent','exhausted'].includes(boundary));
+        assert.equal(ok, !['permanent','exhausted','legacy'].includes(boundary));
         const state = await twin.simulator.snapshot();
         assert.equal(Object.keys(state.pool).length, ok ? 1 : 0);
-        assert.equal(joins, boundary === 'permanent' ? 1 : boundary === 'exhausted' ? 5 : 1);
+        assert.equal(joins, boundary === 'legacy' ? 0 : boundary === 'exhausted' ? 5 : 1);
         assert.equal(new Set([...twin.simulator.run.signed.values()].map(v => v.key)).size, 1, 'all signing and PUT retries must keep the same object');
       } finally { global.fetch = localFetch; }
     });

@@ -66,6 +66,8 @@ The lab now has an **Upload version** selector: original studio code or the loca
 
 It also runs the original pool-upload client in parallel with the QR photo. Three **After idle** presets inject first-use failures at signing, direct storage PUT, or pool confirmation. See [persistent diagnostics and idle tests](candidate/DIAGNOSTICS.md) for the modeled behavior, kiosk logging candidate and limitations. The candidate records safe diagnostics locally under `.runtime/diagnostic-logs/`; an eventual kiosk installation would use `diagnostic-logs/` beside its bridge.
 
+The **Local fix candidate** now includes [safe pool retries](candidate/POOL-RETRIES.md) and matching idempotent relay handlers. Two additional presets cover lost confirmation responses and failed record persistence. All five idle presets should save the portrait with the candidate; the original selector retains its one-attempt behavior for comparison. The candidate needs its matching relay protocol and is not a client-only production patch.
+
 Automated coverage: original-source integrity; upstream queue guards; shared bandwidth and cancellation; real uploader to local storage/download; recovery after five failed confirmations; late-token rejection after reset; outage recovery; durable video queue delivery after process restart; local request-boundary checks.
 
 Browser verification on October 30: generated JPEG renders, QR appears after confirmation, both real synthetic WebM files reach the local viewer. The first healthy browser run showed QR at 2.8 seconds. This is a local test measurement, not a studio benchmark. The 55-second cold-start preset and physical hardware are not covered by the automated checks.

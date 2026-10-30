@@ -392,21 +392,139 @@
    return fetch(path, { ...init, signal: AbortSignal.timeout(20_000) })
  }
  
-@@ -382,12 +384,12 @@
-     const { entryId, key, uploadUrl } = await signRes.json()
-     if (!entryId || !key || !uploadUrl) return false
- 
+@@ -363,49 +365,98 @@
+  * code). Fire-and-forget from the printing screen — a failed join must
+  * never break the customer's own prints. Resolves true on full success.
+  */
+-export async function joinPool(args: {
+-  portraitDataUrl: string
+-  code: string
+-  sessionId: string
+-  seed: boolean
+-}): Promise<boolean> {
++type PoolJoinArgs = { portraitDataUrl: string; code: string; sessionId: string; seed: boolean }
++class PoolRequestError extends Error {
++  readonly retryable: boolean
++  constructor(message: string, retryable: boolean) { super(message); this.retryable = retryable }
++}
++const poolInFlight = new Map<string, Promise<boolean>>()
++const poolCompleted = new Set<string>()
++
++/** Single-flight per session; retries always keep the same server-derived entry. */
++export function joinPool(args: PoolJoinArgs): Promise<boolean> {
++  const identity = JSON.stringify([args.sessionId, args.code])
++  if (poolCompleted.has(identity)) return Promise.resolve(true)
++  const active = poolInFlight.get(identity)
++  if (active) return active
++  const task = deliverPoolPortrait(args).then(ok => {
++    if (ok) {
++      poolCompleted.add(identity)
++      if (poolCompleted.size > 100) poolCompleted.delete(poolCompleted.values().next().value!)
++    }
++    return ok
++  }).finally(() => { poolInFlight.delete(identity) })
++  poolInFlight.set(identity, task)
++  return task
++}
++
++async function deliverPoolPortrait(args: PoolJoinArgs): Promise<boolean> {
++  const deadline = Date.now() + 10 * 60_000
++  async function retry<T>(operation: () => Promise<T>): Promise<T> {
++    let last: unknown
++    for (let attempt = 0; attempt < 5 && Date.now() < deadline; attempt++) {
++      try { return await operation() }
++      catch (err) {
++        last = err
++        if (err instanceof PoolRequestError && !err.retryable) throw err
++        if (attempt === 4) break
++        const wait = 1000 * 2 ** attempt
++        if (Date.now() + wait >= deadline) break
++        await new Promise(resolve => setTimeout(resolve, wait))
++      }
++    }
++    throw last || new Error('Pool delivery deadline reached')
++  }
++  const check = (res: Response, stage: string) => {
++    if (!res.ok) throw new PoolRequestError(`${stage}: HTTP ${res.status}`, res.status === 408 || res.status === 429 || res.status >= 500)
++  }
++  const identityBody = { retryVersion: 1, sessionId: args.sessionId, code: args.code }
++  const remainingTimeout = (maximum: number) => Math.max(1, Math.min(maximum, deadline - Date.now()))
+   try {
+     const blob = await dataUrlToJpegBlob(args.portraitDataUrl)
+     if (!blob) return false
+-
+-    const signRes = await relayFetch('/api/relay/pool/sign-upload', {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ contentType: 'image/jpeg' }),
++    const sign = () => retry(async () => {
++      const res = await diagnosticFetch('/api/relay/pool/sign-upload', {
++        method: 'POST', headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ ...identityBody, contentType: 'image/jpeg' }), signal: AbortSignal.timeout(remainingTimeout(20_000)),
++      }, 'pool.sign')
++      check(res, 'pool.sign')
++      const data = await res.json() as { retryVersion?: number; entryId?: string; key?: string; uploadUrl?: string }
++      if (data.retryVersion !== 1 || !/^[a-f0-9]{16}$/.test(data.entryId || '') || data.key !== `pool-portraits/${data.entryId}.jpg` || !data.uploadUrl) {
++        throw new PoolRequestError('Pool relay lacks the required retry protocol', false)
++      }
++      return { entryId: data.entryId!, key: data.key!, uploadUrl: data.uploadUrl }
+     })
+-    if (!signRes.ok) return false
+-    const { entryId, key, uploadUrl } = await signRes.json()
+-    if (!entryId || !key || !uploadUrl) return false
+-
 -    const putRes = await fetch(uploadUrl, {
-+    const putRes = await diagnosticFetch(uploadUrl, {
-       method: 'PUT',
-       headers: { 'Content-Type': 'image/jpeg' },
-       body: blob,
-       signal: AbortSignal.timeout(120_000),
--    })
-+    }, 'pool.put')
-     if (!putRes.ok) return false
- 
-     const joinRes = await relayFetch('/api/relay/pool/join', {
+-      method: 'PUT',
+-      headers: { 'Content-Type': 'image/jpeg' },
+-      body: blob,
+-      signal: AbortSignal.timeout(120_000),
++    let signed = await sign()
++    const entryId = signed.entryId, key = signed.key
++    await retry(async () => {
++      const res = await diagnosticFetch(signed.uploadUrl, {
++        method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: blob,
++        signal: AbortSignal.timeout(remainingTimeout(120_000)),
++      }, 'pool.put')
++      if (res.status === 403) {
++        // An expired presign may be renewed, but never under a new entry.
++        signed = await sign()
++        if (signed.entryId !== entryId || signed.key !== key) throw new PoolRequestError('Pool upload identity changed', false)
++        throw new PoolRequestError('Pool upload URL renewed', true)
++      }
++      check(res, 'pool.put')
+     })
+-    if (!putRes.ok) return false
+-
+-    const joinRes = await relayFetch('/api/relay/pool/join', {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({
+-        entryId,
+-        portraitKey: key,
+-        code: args.code,
+-        sessionId: args.sessionId,
+-        seed: args.seed,
+-      }),
++    // From this point retry only confirmation, not the uploaded bytes.
++    await retry(async () => {
++      const res = await diagnosticFetch('/api/relay/pool/join', {
++        method: 'POST', headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ ...identityBody, entryId, portraitKey: key, seed: args.seed }),
++        signal: AbortSignal.timeout(remainingTimeout(20_000)),
++      }, 'pool.join')
++      check(res, 'pool.join')
++      const data = await res.json() as { ok?: boolean; entryId?: string }
++      if (data.ok !== true || data.entryId !== entryId) throw new PoolRequestError('Pool confirmation identity mismatch', false)
+     })
+-    if (!joinRes.ok) return false
+     console.log('[linconnu] pool entry created')
+     return true
+   } catch (err) {
+-    console.warn('[linconnu] pool join failed:', (err as Error).message)
++    console.warn('[linconnu] pool delivery failed:', err instanceof PoolRequestError ? err.message : 'network, timeout or decoding failure')
+     return false
+   }
+ }
 --- /dev/null
 +++ b/capturism-app/src/lib/qrWaitPolicy.ts
 @@ -0,0 +1,10 @@
@@ -467,6 +585,189 @@
      } catch (err) {
        const msg = (err as Error).message
        const waitMs = Math.min(30_000, 2_000 * attempt)
+--- /dev/null
++++ b/capturism-relay/pool-retry.cjs
+@@ -0,0 +1,26 @@
++'use strict';
++const crypto = require('crypto');
++function uploadIdentity(boothId, sessionId, code) {
++  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 128 || !/^\d{6}$/.test(String(code))) {
++    throw Object.assign(new Error('Invalid pool upload identity'), { status: 400 });
++  }
++  return crypto.createHash('sha256').update(JSON.stringify([boothId, sessionId, String(code)])).digest('hex').slice(0, 16);
++}
++function createJoinCoordinator({ entries, persist }) {
++  const pending = new Map();
++  function same(a, b) { return a.id === b.id && a.boothId === b.boothId && a.sessionId === b.sessionId && a.portraitKey === b.portraitKey; }
++  function conflict() { throw Object.assign(new Error('Pool upload identity conflict'), { status: 409 }); }
++  return async function join(entry) {
++    const key = JSON.stringify([entry.boothId, entry.sessionId]);
++    if (pending.has(key)) { const stored = await pending.get(key); if (!same(stored, entry)) conflict(); return stored; }
++    const existing = entries.get(entry.id) || [...entries.values()].find(e => e.boothId === entry.boothId && e.sessionId === entry.sessionId);
++    if (existing) { if (!same(existing, entry)) conflict(); return existing; }
++    const save = (async () => {
++      // Do not expose an entry in the in-memory pool until durable save succeeds.
++      await persist(entry); entries.set(entry.id, entry); return entry;
++    })();
++    pending.set(key, save);
++    try { return await save; } finally { pending.delete(key); }
++  };
++}
++module.exports = { uploadIdentity, createJoinCoordinator };
+--- a/capturism-relay/pool.js
++++ b/capturism-relay/pool.js
+@@ -47,6 +47,7 @@
+ "use strict";
+ 
+ const crypto = require("crypto");
++const { uploadIdentity, createJoinCoordinator } = require("./pool-retry.cjs");
+ const {
+   PutObjectCommand,
+   GetObjectCommand,
+@@ -81,6 +82,14 @@
+ 
+ // In-memory mirror (id → entry). Hydrated from R2 on boot.
+ const entries = new Map();
++let hydrated = false;
++let hydrationPromise = null;
++function ensureHydrated() {
++  if (hydrated) return Promise.resolve(true);
++  if (!hydrationPromise) hydrationPromise = hydrate().then(ok => { hydrated = ok; return ok; }).finally(() => { hydrationPromise = null; });
++  return hydrationPromise;
++}
++const joinOnce = createJoinCoordinator({ entries, persist: entry => persistEntry(entry, true) });
+ 
+ // ── Public API ──────────────────────────────────────────────────────
+ 
+@@ -93,7 +102,7 @@
+   console.log(
+     `[pool] max_distributions=${MAX_DISTRIBUTIONS} min_active=${MIN_ACTIVE} require_optin_to_receive=${REQUIRE_OPTIN_TO_RECEIVE}`,
+   );
+-  void hydrate();
++  void ensureHydrated();
+ }
+ 
+ function activeCount() {
+@@ -116,10 +125,18 @@
+     try { data = JSON.parse(body); }
+     catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
+ 
++    if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
++    if (data.retryVersion === 1 && data.contentType !== "image/jpeg") return jsonResponse(res, 400, { error: "Retry uploads require JPEG" });
+     const ext = PORTRAIT_CONTENT_TYPES.get(data.contentType);
+     if (!ext) return jsonResponse(res, 400, { error: "Unsupported contentType" });
+ 
+-    const entryId = crypto.randomBytes(8).toString("hex");
++    let entryId;
++    if (data.retryVersion === 1) {
++      const record = quiz.getRecordByCode(data.code);
++      if (!record || record.status !== "redeemed" || (record.redeemedBy && record.redeemedBy !== boothId)) return jsonResponse(res, 400, { error: "No redeemed quiz record" });
++      try { entryId = uploadIdentity(boothId, data.sessionId, data.code); }
++      catch { return jsonResponse(res, 400, { error: "Invalid pool upload identity" }); }
++    } else entryId = crypto.randomBytes(8).toString("hex");
+     const key = `${PORTRAIT_PREFIX}${entryId}.${ext}`;
+     try {
+       const uploadUrl = await getSignedUrl(
+@@ -128,7 +145,7 @@
+         { expiresIn: SIGNED_UPLOAD_TTL_S },
+       );
+       console.log(`[pool] signed portrait upload for ${boothId} → ${key}`);
+-      jsonResponse(res, 200, { entryId, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
++      jsonResponse(res, 200, { entryId, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S, retryVersion: data.retryVersion === 1 ? 1 : undefined });
+     } catch (err) {
+       console.error(`[pool] sign-upload failed: ${err.message}`);
+       jsonResponse(res, 500, { error: "Failed to sign upload URL" });
+@@ -150,18 +167,25 @@
+     try { data = JSON.parse(body); }
+     catch { return jsonResponse(res, 400, { error: "Invalid JSON" }); }
+ 
++    if (data.retryVersion === 1 && !(await ensureHydrated())) return jsonResponse(res, 503, { error: "Pool storage not ready" });
+     const entryId = typeof data.entryId === "string" && /^[a-f0-9]{16}$/.test(data.entryId)
+       ? data.entryId : null;
+     const portraitKey = typeof data.portraitKey === "string" && data.portraitKey.startsWith(PORTRAIT_PREFIX)
+       ? data.portraitKey : null;
+     if (!entryId || !portraitKey) return jsonResponse(res, 400, { error: "Missing entryId/portraitKey" });
+-    if (entries.has(entryId)) return jsonResponse(res, 409, { error: "Entry already exists" });
++    if (data.retryVersion !== 1 && entries.has(entryId)) return jsonResponse(res, 409, { error: "Entry already exists" });
+ 
+     const record = quiz.getRecordByCode(data.code);
+-    if (!record || record.status !== "redeemed") {
++    if (!record || record.status !== "redeemed" || (record.redeemedBy && record.redeemedBy !== boothId)) {
+       return jsonResponse(res, 400, { error: "No redeemed quiz record for this code" });
+     }
+ 
++    if (data.retryVersion === 1) {
++      let expected;
++      try { expected = uploadIdentity(boothId, data.sessionId, data.code); }
++      catch { return jsonResponse(res, 400, { error: "Invalid pool upload identity" }); }
++      if (entryId !== expected || portraitKey !== `${PORTRAIT_PREFIX}${entryId}.jpg`) return jsonResponse(res, 409, { error: "Pool upload identity conflict" });
++    }
+     const entry = {
+       id: entryId,
+       boothId,
+@@ -183,8 +207,12 @@
+       distributions: [],
+       status: "active",
+     };
+-    entries.set(entry.id, entry);
+-    await persistEntry(entry);
++    try {
++      if (data.retryVersion === 1) await joinOnce(entry);
++      else { await persistEntry(entry, true); entries.set(entry.id, entry); }
++    } catch (err) {
++      return jsonResponse(res, err.status === 409 ? 409 : 503, { error: err.status === 409 ? "Pool upload identity conflict" : "Pool entry not saved; retry confirmation" });
++    }
+     console.log(`[pool] joined: ${entry.firstName} (@${entry.handle}) — ${activeCount()} active`);
+     jsonResponse(res, 200, { ok: true, entryId: entry.id, activeCount: activeCount() });
+   });
+@@ -441,8 +469,8 @@
+ 
+ // ── R2 persistence ──────────────────────────────────────────────────
+ 
+-async function persistEntry(entry) {
+-  if (!r2Client) return;
++async function persistEntry(entry, strict = false) {
++  if (!r2Client) { if (strict) throw new Error("Storage not configured"); return; }
+   try {
+     await r2Client.send(new PutObjectCommand({
+       Bucket: R2_BUCKET,
+@@ -452,6 +480,7 @@
+     }));
+   } catch (err) {
+     console.error(`[pool] R2 persist failed for ${entry.id}: ${err.message}`);
++    if (strict) throw err;
+   }
+ }
+ 
+@@ -496,9 +525,10 @@
+ async function hydrate() {
+   if (!r2Client) {
+     console.log("[pool] R2 not configured — pool runs in-memory only (dev).");
+-    return;
++    return false;
+   }
+   try {
++    let failed = false;
+     let token;
+     do {
+       const page = await r2Client.send(new ListObjectsV2Command({
+@@ -513,13 +543,16 @@
+           if (entry && entry.id) entries.set(entry.id, entry);
+         } catch (err) {
+           console.error(`[pool] hydrate skip ${obj.Key}: ${err.message}`);
++          failed = true;
+         }
+       }
+       token = page.IsTruncated ? page.NextContinuationToken : undefined;
+     } while (token);
+     console.log(`[pool] hydrated — ${entries.size} entrie(s), ${activeCount()} active.`);
++    return !failed;
+   } catch (err) {
+     console.error(`[pool] hydration failed: ${err.message}`);
++    return false;
+   }
+ }
+ 
 --- /dev/null
 +++ b/diagnostics.cjs
 @@ -0,0 +1,46 @@

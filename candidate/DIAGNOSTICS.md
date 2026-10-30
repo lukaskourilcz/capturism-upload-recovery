@@ -1,10 +1,12 @@
 # Idle failure investigation: local candidate
 
+The pool client now also includes safe retries; see [POOL-RETRIES.md](POOL-RETRIES.md) for current candidate behavior. The one-attempt outcomes below document the original failure mechanism.
+
 Prepared locally against Capturism `1f2df64`. No kiosk, relay, Cloudflare or client communication was changed.
 
 ## Twin experiments
 
-Select **Local fix candidate**, leave **Include synthetic pool portrait** checked and choose:
+For comparison, select **Original studio code**, leave **Include synthetic pool portrait** checked and choose:
 
 | Preset | Injected fault | Expected result |
 | --- | --- | --- |
@@ -15,9 +17,9 @@ Select **Local fix candidate**, leave **Include synthetic pool portrait** checke
 
 Faults are consumed on first use. The next pool attempt in the same run succeeds. Starting a new test re-arms them. These are controlled first-use fault models, not a two-hour Windows/Chrome idle test and not a diagnosis of the studio hardware. No pool matching, identity or real quiz validation is performed by the local service.
 
-`vendor/linconnu.ts` is the unchanged pool client from the downloaded commit, with its source hash in the provenance manifest. The candidate adds structured diagnostics but keeps the one-attempt behavior so failure evidence stays visible. No automatic pool retry or change to customer consent is introduced.
+`vendor/linconnu.ts` is the unchanged pool client from the downloaded commit, with its source hash in the provenance manifest. The original selector keeps that one-attempt behavior for comparison. The local candidate now uses safe retries plus idempotent relay confirmation. Customer consent still comes from the redeemed quiz record.
 
-Browser test: a real canvas JPEG pool portrait (about 34 KiB) and a 1 MiB QR photo were uploaded in parallel at 125 KiB/s. First PUTs returned 503. Pool failed; QR became ready in approximately 10.3 seconds. The on-disk log showed `pool.put` status 503 and a subsequent successful `photo.put` and `photo.confirm`.
+Historical browser test before pool retries: a real canvas JPEG pool portrait (about 34 KiB) and a 1 MiB QR photo were uploaded in parallel at 125 KiB/s. First PUTs returned 503. Pool failed; QR became ready in approximately 10.3 seconds. The on-disk log showed `pool.put` status 503 and a subsequent successful `photo.put` and `photo.confirm`.
 
 ## Persistent kiosk diagnostics
 
