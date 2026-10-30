@@ -1,18 +1,19 @@
 # Patch audit coverage
 
-Scope: combined candidate patch against Capturism `1f2df64`; starting local revision `e649a43`. Local replacements only; no production requests, credentials, device operations, deployment or messaging.
+Scope: complete candidate against Capturism `1f2df64`; tested implementation `8f738df`. Earlier hardening `0dd1d4f` retained. Local replacements only; no production requests, credentials, deployment, device operations or messages.
 
-| Area | Files / callers | Final status / evidence |
+| Area | Files / callers | Status / evidence |
 | --- | --- | --- |
-| Queue acceptance, persistence, checksums, receipts | `pool-queue.cjs`, bridge POST route, browser `joinPool` | Reviewed/tested: process-kill and acknowledgement recovery, byte retention, blocked/corrupt states, quota and receipt cleanup. Added recovery metadata validation. Single-writer limitation remains. |
-| Relay identity / durable acknowledgement | `pool.js`, `pool-retry.cjs`, quiz lookup | Reviewed/tested: concurrent join, durable save failure, hydration/restart and seed conflict. Published bytes remain mutable (R2 blocker). |
-| Cross-boundary withdrawal and replay | pool delete handler, deletion log, retry coordinator | Reviewed and unsafe replay reproduced using actual handlers. R1 remains open; artifact in test-results, script in audit/. |
-| Old/new client coexistence and rollback | legacy pool branch, manual kiosk update, Render auto-deploy | Tested new relay + old client and new queue + old relay. Downgrade blocks delivery and retains bytes. Full real-environment rehearsal remains a release gate. |
-| Browser upload and timing | `relayUpload.ts`, `qrWaitPolicy.ts`, `ByePage.tsx`, `Printing.tsx` | Reviewed all changed call sites. Existing tests cover confirmation-only retry, late-token guard and 5/10-minute policy. Real idle cause/hardware rendering still unverified. |
-| Diagnostic safety / listeners / proxy | `diagnostics.ts`, `diagnostics.cjs`, `App.tsx`, bridge forwarding | Reviewed/tested allowlist, rotation/reopen, bounded requests, failure isolation and listener cleanup. Local proxy provenance guard added. |
-| Dev server and external ingress | existing Vite `/api` proxy and tunnel configuration | Vite source confirms generic proxy precedes normal handlers and changes origin Host. Local origin/forwarded/Host-denial tested. Actual tunnel/header rewrite behavior remains unverified and is a release gate. |
-| Tests / simulation fidelity | twin, process tests, relay handler mocks | Full suite and adversarial reproductions run locally. No provider writes. Known-bug scripts are explicitly separate from passing safety checks. |
-| Dependencies and build | baseline lockfiles, candidate source overlay | No new production dependencies. Full TypeScript/lint/Vite build passed; registry advisory counts recorded; real exploitability/upgrade triage not completed. |
-| Payments / camera / printer / lights | surrounding bridge paths | Reviewed diff/callers for unintended effects; no API contracts changed. Hardware and financial execution deliberately excluded. |
-| Cloudflare Pages admin/download | unchanged code and manual deployment targets | Not applicable to release patch; no deploy planned |
-| Actual Windows, R2, Render and kiosk versions | external runtime | Unverified; explicit release gates required |
+| Queue acceptance, checksums, receipts | `pool-queue.cjs`, bridge POST, browser `joinPool` | Reviewed/tested: process kill, lost local ACK, corruption, disk failure, quotas, duplicate/conflicting handoff, old uploaded checkpoint migration, withdrawn receipt and generic 410 retention. Single-writer/physical Windows limits remain. |
+| Immutable publication / identity | `pool-publication.cjs`, `pool.js`, `server.js` route, quiz lookup | Reviewed/tested actual handlers: digest binding, commit-time conditional image/record writes, competing relays, lost provider ACK, retired/history preservation, legacy digest verification. R2 blocker closed locally. Full server runtime/provider auth execution unverified. |
+| Withdrawal / replay / startup | canonical tombstone, deletion marker, `withdraw`, hydration, match persistence, portrait/list reads | Reviewed/tested: delayed body/image/metadata, cross-relay races, partial cleanup, lookup outage, stale backups, stale match writes and restart orphan cleanup. R1 closed locally. No claim of atomic multi-object physical deletion. |
+| Upgrade / rollback | old sign/join endpoints, new worker, legacy relay | Tested: old browser rejected with 426/no URL; new queue + old relay blocked with bytes retained. Old pending/uploaded jobs use v2 with original identity. Outstanding old write capabilities and real cutover remain gates. |
+| Browser QR / timing | `relayUpload.ts`, `qrWaitPolicy.ts`, `ByePage.tsx`, `Printing.tsx` | Reviewed call sites, tests cover confirmation-only retries, token privacy, 5/10-minute policy and local-save failure. End-to-end absolute deadline remains medium open. |
+| Diagnostics / ingress | `diagnostics.ts/cjs`, `App.tsx`, bridge proxy, `local-request.cjs` | Reviewed/tested allowlist, rotation, reopen, bounds, failure isolation, listeners, cross-origin/forwarded/Host rejection. Actual tunnel stripping/rewrites remain unverified. |
+| Test fidelity / performance | twin, local disk storage, handler fixtures, child processes | 71 tests pass. Real local HTTP/disk/SIGKILL; mock R2 has commit-time ETags and failure hooks. Historical v1 browser tests are fixtures, not the shipped protocol. Earlier queue scan measurement recorded; new relay performance unmeasured. |
+| Build / dependencies | baseline lockfiles, candidate kiosk overlay | TypeScript, full lint, production/twin builds, JS syntax and patch check pass. No new dependencies. Baseline advisory reachability/upgrade triage remains open. |
+| Payments / camera / printer / lights | unchanged surrounding bridge paths | Diff/callers checked for unintended changes; no device or financial execution. Full hardware operation unverified. |
+| Cloudflare Pages admin/download | unchanged applications | No deployment needed by this patch; no write actions performed. |
+| Actual Windows, R2, Render and kiosk versions | external runtime | Unverified. Conditional permissions, retention, credentials cutover, hosting limits, disk recovery and studio idle evidence are release gates. |
+
+Evidence paths and remaining decisions are recorded in [AUDIT.md](AUDIT.md). Green local tests do not certify untested provider/hardware behavior.

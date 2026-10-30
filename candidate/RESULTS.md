@@ -2,6 +2,8 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
+This document records the initial QR experiment. Current combined verification is in [AUDIT.md](AUDIT.md): 71 tests pass, protocol-2 pool publication closes the withdrawal/overwrite blockers locally, and provider/kiosk/cutover gates remain. The ten-minute QR patience is still not a strict end-to-end upload deadline.
+
 ## Reproduction
 
 Identical 1 MiB photo, shared uplink capped at 125 KiB/s, 150 ms modeled cloud latency. Real uploader and real HTTP bytes; no fake retry timers. The thank-you page inactivity deadline was shortened from five minutes to four seconds to exercise the race quickly. This is an accelerated reproduction of a failure mechanism, not proof of the exact historical studio incident.

@@ -28,7 +28,7 @@ Stop with Ctrl+C. `npm test` runs the isolated integration tests and the upstrea
 | Video composition | Two short synthetic WebM fixtures; optional preparation delay, not the real compositor |
 | Local bridge | Upload-only proxy/enqueue boundary; no printer, payment or camera drivers |
 | Render relay | Local sign/confirm/download API model; does not run production `server.js` |
-| Cloudflare R2 | Local disk object store with expiring opaque upload URLs; not S3 signing, Cloudflare CORS or R2 persistence/recovery logic |
+| Cloudflare R2 | Local disk object store; QR/original pool URLs are modeled, candidate pool conditional writes use local ETags. No real S3 signing, Cloudflare CORS, provider IAM or physical recovery verification |
 | Download page | Local simplified preview with polling; not the deployed Cloudflare build |
 | Network | Shared PUT throughput and configurable latency, congestion, outage and cold-start models; not OS-level packet shaping |
 
@@ -66,9 +66,11 @@ The lab now has an **Upload version** selector: original studio code or the loca
 
 It also runs the original pool-upload client in parallel with the QR photo. Three **After idle** presets inject first-use failures at signing, direct storage PUT, or pool confirmation. See [persistent diagnostics and idle tests](candidate/DIAGNOSTICS.md) for the modeled behavior, kiosk logging candidate and limitations. The candidate records safe diagnostics locally under `.runtime/diagnostic-logs/`; an eventual kiosk installation would use `diagnostic-logs/` beside its bridge.
 
-The **Local fix candidate** now includes [safe pool retries](candidate/POOL-RETRIES.md) and matching idempotent relay handlers. Two additional presets cover lost confirmation responses and failed record persistence. All five idle presets should save the portrait with the candidate; the original selector retains its one-attempt behavior for comparison. The candidate needs its matching relay protocol and is not a client-only production patch.
+The **Local fix candidate** includes [durable pool retries](candidate/DURABLE-POOL.md) and [publication protocol 2](candidate/PUBLICATION-FENCING.md). Two additional presets cover lost responses and failed record persistence. All five idle presets recover with the candidate; the original selector retains its one-attempt behavior for comparison. The preset names retain their historical sign/PUT/join labels; candidate faults are injected at reservation/body/publication boundaries. [Direct-browser retries](candidate/POOL-RETRIES.md) are a historical fixture. The candidate requires its matching relay and is not a client-only production patch.
 
 Pool delivery is now [durable on the bridge](candidate/DURABLE-POOL.md): browser acceptance means the portrait was written locally, and the bridge resumes delivery from disk after browser reloads or process restarts. The twin reports **saved locally** separately from **delivered**. Use Restart bridge within the current experiment to test recovery; starting a fresh experiment intentionally uses a different queue folder.
+
+The candidate relay no longer issues pool PUT URLs. It binds delivery to the portrait digest, writes published bytes only once, and retains a minimal durable withdrawal fence. Tests cover deletion during upload, competing relays, stale queue/remote backups and restart recovery. Old pool sign/join clients receive 426. Retiring old write capabilities and preserving v2 fences on rollback are mandatory future cutover steps; see the [updated audit](candidate/AUDIT.md) and [rollout/rollback plan](candidate/ROLLOUT-ROLLBACK.md). All 71 local tests pass; nothing is deployed.
 
 Automated coverage: original-source integrity; upstream queue guards; shared bandwidth and cancellation; real uploader to local storage/download; recovery after five failed confirmations; late-token rejection after reset; outage recovery; durable video queue delivery after process restart; local request-boundary checks.
 

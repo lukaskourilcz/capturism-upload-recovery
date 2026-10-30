@@ -1,6 +1,6 @@
 # Safe pool upload retries — local candidate
 
-**Updated:** browser-owned delivery has now been replaced by the [durable bridge queue](DURABLE-POOL.md). The direct-browser algorithm and its limits below describe the earlier candidate, retained as a regression fixture. Stable relay identity and durable, idempotent confirmation remain in use.
+**Historical protocol 1:** browser delivery has been replaced by the [durable bridge queue](DURABLE-POOL.md) and [publication protocol 2](PUBLICATION-FENCING.md). Everything below describes an earlier candidate retained only as a regression fixture. Its presigned upload/confirmation protocol is disabled in the current relay (HTTP 426); its overwrite/withdrawal limits must not be read as current safety guarantees. The stable identity is retained by v2.
 
 Based on Capturism `1f2df64`. These are local review files and a combined patch, not installed production changes.
 
