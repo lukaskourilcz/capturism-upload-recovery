@@ -32,13 +32,18 @@ export const json = (res, code, body) => {
 // Competing traffic reserves bandwidth; it models congestion, not TCP packet loss.
 export class Uplink {
   constructor(bytesPerSecond) {
-    this.rate = bytesPerSecond; this.jobs = new Set();
+    this.rate = bytesPerSecond; this.jobs = new Set(); this.credit = 0;
     this.timer = setInterval(() => {
-      const share = this.rate / 20 / Math.max(1, this.jobs.size);
-      for (const j of this.jobs) {
-        j.left -= share;
-        if (j.left <= 0) { this.jobs.delete(j); j.cleanup(); j.resolve(); }
+      let budget = this.rate / 20 + this.credit;
+      while (this.jobs.size && budget > 0) {
+        const share = budget / this.jobs.size;
+        for (const j of this.jobs) {
+          const spent = Math.min(j.left, share); j.left -= spent; budget -= spent;
+          if (j.left <= 0) { this.jobs.delete(j); j.cleanup(); j.resolve(); }
+        }
+        if (budget < .001) break;
       }
+      this.credit = Math.min(this.rate / 20, budget);
     }, 50);
   }
   transfer(size, signal) {

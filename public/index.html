@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Capturism · Upload lab</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><a class="brand" href="/">capturism<span> / upload lab</span></a><span class="pill">● Local replica</span></header>
+<main id="lab">
+  <section class="intro"><p class="eyebrow">STUDIO DIAGNOSTICS</p><h1>Follow the photo.<br>Find the hold-up.</h1><p>Run the studio’s upload code against local services.<br>Change the connection, watch the queue, and see when the QR becomes ready.</p></section>
+  <div class="workspace">
+    <aside class="panel controls"><h2>Set the scene</h2>
+      <label for="scenario">Connection scenario</label><select id="scenario"><option value="normal">Healthy connection</option><option value="studio">Slow studio connection · ~1 Mbps</option><option value="congested">Slow + competing traffic</option><option value="cold">Relay waking up · 55 seconds</option><option value="offline">Offline for 20 seconds</option><option value="confirm">Confirmation fails five times</option></select>
+      <div class="pair"><div><label for="size">Test photo (MiB)</label><input id="size" type="number" min="0.1" max="16" step="0.1" value="1"></div><div><label for="reset">Reset after (seconds)</label><input id="reset" type="number" min="1" max="900" value="300"></div></div>
+      <label for="composition">Preparation delay (seconds)</label><input id="composition" type="number" min="0" max="600" value="0"><p class="hint">Models time before upload starts. Photo rendering and video composition are not reproduced here.</p>
+      <label class="check"><input id="videos" type="checkbox" checked> Include two synthetic video clips</label>
+      <label for="photo">Or use a test photo</label><input id="photo" type="file" accept="image/jpeg,image/png"><p class="hint">Stays on this computer. A selected file uses its actual compressed size.</p>
+      <button id="start" class="primary">Start test session <span>↗</span></button>
+      <div class="secondary"><button id="end" disabled>End kiosk session</button><button id="bridge" disabled>Restart bridge</button></div>
+      <a id="report" href="/lab/report" download="capturism-test-report.json">Save test report ↓</a>
+    </aside>
+    <div class="results">
+      <section class="panel flow"><div class="section-title"><h2>From print to phone</h2><span id="elapsed">Ready to start</span></div><div class="steps"><div id="step-prep"><b>01</b><span>Prepare</span><small>Test media</small></div><div id="step-sign"><b>02</b><span>Sign</span><small>Relay</small></div><div id="step-put"><b>03</b><span>Upload</span><small>Local storage</small></div><div id="step-confirm"><b>04</b><span>Confirm</span><small>Relay</small></div><div id="step-qr"><b>05</b><span>QR ready</span><small>Kiosk</small></div></div></section>
+      <div class="pair preview-row"><section class="panel kiosk"><p class="eyebrow">KIOSK SCREEN</p><h2 id="status">Your session starts here.</h2><p id="detail">The QR appears only when the original uploader returns a confirmed session token.</p><canvas id="qr" hidden></canvas><a id="download" hidden target="_blank" rel="noopener">Open local download page ↗</a><p class="hint">Local QR: open the link on this computer. It is not reachable from a phone.</p></section><section class="panel queue"><div class="section-title"><h2>Video queue</h2><span id="queue-count" class="pill">0 waiting</span></div><p class="hint">Original bridge worker · files survive a bridge restart · retries use real timings.</p><div id="queue-items" class="empty">No queued videos yet.</div><div id="network" class="network">Local services are idle.</div></section></div>
+      <section class="panel timeline"><div class="section-title"><h2>Session timeline</h2><span class="hint">Live · real elapsed time</span></div><ol id="events"><li class="empty">Start a session to trace each request.</li></ol></section>
+    </div>
+  </div>
+  <footer><b>What this replica covers</b><p>Original photo uploader and durable video queue from commit <code>1f2df64</code>. Local relay, storage and download viewer are substitutes. Network speed and interruptions are controlled models, not measurements from the studio. Camera, printer, payment terminal, Windows and the complete kiosk interface are outside this version.</p></footer>
+</main>
+<main id="viewer" hidden><section class="intro"><p class="eyebrow">LOCAL CUSTOMER PREVIEW</p><h1>Your test session.</h1><p id="viewer-status">Loading the confirmed session…</p></section><div id="assets" class="assets"></div><p class="hint">This is a simplified download viewer, not the deployed Cloudflare page.</p></main>
+<script type="module" src="/app.js"></script></body></html>
