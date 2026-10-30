@@ -8,7 +8,7 @@ class GetObjectCommand { constructor(input) { this.input = input; } }
 class ListObjectsV2Command { constructor(input) { this.input = input; } }
 class DeleteObjectCommand { constructor(input) { this.input = input; } }
 const source = await readFile(new URL('../../candidate/capturism-relay/pool.js', import.meta.url), 'utf8');
-export function makeRelay(storage) {
+export function makeRelay(storage, code = source) {
   const module = { exports: {} };
   const context = { module, exports: module.exports, process: { env: {} }, crypto, console: { log() {}, error() {} }, Buffer, Map, Set, Date, Promise,
     require(name) {
@@ -21,7 +21,7 @@ export function makeRelay(storage) {
       throw new Error('Unexpected dependency: ' + name);
     },
   };
-  vm.runInNewContext(source, context);
+  vm.runInNewContext(code, context);
   module.exports.init({ client: storage, bucket: 'local', jsonResponse: (res, status, body) => res.resolve({ status, body }), readBody: (req, callback) => { void callback(JSON.stringify(req.body)); } });
   return module.exports;
 }
