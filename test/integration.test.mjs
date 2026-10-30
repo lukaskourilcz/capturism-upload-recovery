@@ -95,6 +95,14 @@ test('original browser uploader works against local relay/storage boundaries', a
       await sleep(250); uploader.resetSession(); await rejected;
       assert.ok((await twin.simulator.snapshot()).events.some(e => e.stage === 'confirmed'), 'server may commit; browser must refuse late token');
     });
+    await t.test('temporary outage recovers through the original signing retries', async () => {
+      await post('/lab/start', { scenario: 'offline' });
+      twin.simulator.run.cfg.offline = 2; // Short fault duration; uploader timings remain unchanged.
+      const token = await uploader.uploadSessionToCloud({ photo });
+      const state = await twin.simulator.snapshot();
+      assert.ok(state.events.some(e => e.stage === 'network'));
+      assert.ok(state.sessions[token]);
+    });
     await t.test('original video queue survives a process restart and delivers both clips', async () => {
       await post('/lab/start', { scenario: 'normal' });
       const video = new Blob([new Uint8Array(20000)], { type: 'video/webm' });
