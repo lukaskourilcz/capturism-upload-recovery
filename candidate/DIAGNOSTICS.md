@@ -1,6 +1,6 @@
 # Idle failure investigation: local candidate
 
-The current candidate uses the durable bridge and [publication protocol 2](PUBLICATION-FENCING.md): reservation, authenticated JPEG body and conditional publication. Old direct sign/join writes are disabled. Pool worker diagnostics report safe queue outcomes without payloads/identifiers. Current validation and limits are in [AUDIT.md](AUDIT.md). The sign/PUT/join outcomes below document the original one-attempt mechanism; [protocol 1 retries](POOL-RETRIES.md) are a historical fixture.
+The current candidate uses the durable bridge and [publication protocol 2](PUBLICATION-FENCING.md): reservation, authenticated JPEG body and conditional publication. Old direct sign/join writes are disabled. Pool worker diagnostics report safe queue outcomes without payloads/identifiers. Current validation and limits are in [AUDIT.md](AUDIT.md). QR terminal outcomes now emit allowlisted `photo.flow` duration/error events; deadline aborts classify as timeout. No new payload/identity fields are logged. The sign/PUT/join outcomes below document the original one-attempt mechanism; [protocol 1 retries](POOL-RETRIES.md) are a historical fixture.
 
 Prepared locally against Capturism `1f2df64`. No kiosk, relay, Cloudflare or client communication was changed.
 
