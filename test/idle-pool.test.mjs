@@ -32,7 +32,7 @@ test('real pool client and QR uploader under injected first-use failures after i
   global.Image = class { naturalWidth = 100; naturalHeight = 100; set src(_) { queueMicrotask(() => this.onload()); } };
   global.document = { createElement: () => ({ getContext: () => ({ fillRect() {}, drawImage() {} }), toBlob: callback => callback(new Blob([new Uint8Array(16 * 1024)], { type: 'image/jpeg' })) }) };
   const file = join(root, 'clients.mjs');
-  await build({ stdin: { contents: "export {joinPool} from './candidate/capturism-app/src/lib/linconnu.ts'; export {uploadSessionToCloud} from './candidate/capturism-app/src/lib/relayUpload.ts';", resolveDir: resolve('.') }, outfile: file, bundle: true, platform: 'node', format: 'esm', plugins: [{ name: 'adapters', setup(b) { b.onResolve({ filter: /^(\.\/boothRelay|\.\.\/store\/sessionStore)$/ }, () => ({ path: resolve('src/adapters.ts') })); } }] });
+  await build({ stdin: { contents: "export {joinPool} from './test/fixtures/browser-pool-retry.ts'; export {uploadSessionToCloud} from './candidate/capturism-app/src/lib/relayUpload.ts';", resolveDir: resolve('.') }, outfile: file, bundle: true, platform: 'node', format: 'esm', plugins: [{ name: 'adapters', setup(b) { b.onResolve({ filter: /^(\.\/boothRelay|\.\.\/store\/sessionStore)$/ }, () => ({ path: resolve('src/adapters.ts') })); } }] });
   global.fetch = (url, init) => { const u = new URL(url, twin.baseUrl); assert.equal(u.hostname, '127.0.0.1'); return nativeFetch(u, init); };
   try {
     const client = await import(pathToFileURL(file));

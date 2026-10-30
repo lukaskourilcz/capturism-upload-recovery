@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const STAGES = new Set(['photo.sign','photo.put','photo.confirm','video.enqueue','pool.sign','pool.put','pool.join','render.segmentation','render.raster','render.video','page.visibility','page.timer','page.boot','relay.http']);
+const STAGES = new Set(['photo.sign','photo.put','photo.confirm','video.enqueue','pool.sign','pool.put','pool.join','pool.enqueue','pool.delivery','render.segmentation','render.raster','render.video','page.visibility','page.timer','page.boot','relay.http']);
 // Only explicit metadata is written. Never accept arbitrary console output,
 // URLs, request/response bodies, names, quiz codes, auth or signed query strings.
 function sanitize(input) {

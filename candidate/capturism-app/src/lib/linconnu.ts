@@ -366,97 +366,42 @@ async function dataUrlToJpegBlob(dataUrl: string): Promise<Blob | null> {
  * never break the customer's own prints. Resolves true on full success.
  */
 type PoolJoinArgs = { portraitDataUrl: string; code: string; sessionId: string; seed: boolean }
-class PoolRequestError extends Error {
-  readonly retryable: boolean
-  constructor(message: string, retryable: boolean) { super(message); this.retryable = retryable }
-}
 const poolInFlight = new Map<string, Promise<boolean>>()
-const poolCompleted = new Set<string>()
-
-/** Single-flight per session; retries always keep the same server-derived entry. */
+/** True means durably accepted by the bridge, not yet delivered to the pool. */
 export function joinPool(args: PoolJoinArgs): Promise<boolean> {
   const identity = JSON.stringify([args.sessionId, args.code])
-  if (poolCompleted.has(identity)) return Promise.resolve(true)
   const active = poolInFlight.get(identity)
   if (active) return active
-  const task = deliverPoolPortrait(args).then(ok => {
-    if (ok) {
-      poolCompleted.add(identity)
-      if (poolCompleted.size > 100) poolCompleted.delete(poolCompleted.values().next().value!)
-    }
-    return ok
-  }).finally(() => { poolInFlight.delete(identity) })
+  const task = enqueuePoolPortrait(args).finally(() => { poolInFlight.delete(identity) })
   poolInFlight.set(identity, task)
   return task
 }
-
-async function deliverPoolPortrait(args: PoolJoinArgs): Promise<boolean> {
-  const deadline = Date.now() + 10 * 60_000
-  async function retry<T>(operation: () => Promise<T>): Promise<T> {
-    let last: unknown
-    for (let attempt = 0; attempt < 5 && Date.now() < deadline; attempt++) {
-      try { return await operation() }
-      catch (err) {
-        last = err
-        if (err instanceof PoolRequestError && !err.retryable) throw err
-        if (attempt === 4) break
-        const wait = 1000 * 2 ** attempt
-        if (Date.now() + wait >= deadline) break
-        await new Promise(resolve => setTimeout(resolve, wait))
-      }
-    }
-    throw last || new Error('Pool delivery deadline reached')
-  }
-  const check = (res: Response, stage: string) => {
-    if (!res.ok) throw new PoolRequestError(`${stage}: HTTP ${res.status}`, res.status === 408 || res.status === 429 || res.status >= 500)
-  }
-  const identityBody = { retryVersion: 1, sessionId: args.sessionId, code: args.code }
-  const remainingTimeout = (maximum: number) => Math.max(1, Math.min(maximum, deadline - Date.now()))
+async function enqueuePoolPortrait(args: PoolJoinArgs): Promise<boolean> {
   try {
     const blob = await dataUrlToJpegBlob(args.portraitDataUrl)
-    if (!blob) return false
-    const sign = () => retry(async () => {
-      const res = await diagnosticFetch('/api/relay/pool/sign-upload', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...identityBody, contentType: 'image/jpeg' }), signal: AbortSignal.timeout(remainingTimeout(20_000)),
-      }, 'pool.sign')
-      check(res, 'pool.sign')
-      const data = await res.json() as { retryVersion?: number; entryId?: string; key?: string; uploadUrl?: string }
-      if (data.retryVersion !== 1 || !/^[a-f0-9]{16}$/.test(data.entryId || '') || data.key !== `pool-portraits/${data.entryId}.jpg` || !data.uploadUrl) {
-        throw new PoolRequestError('Pool relay lacks the required retry protocol', false)
-      }
-      return { entryId: data.entryId!, key: data.key!, uploadUrl: data.uploadUrl }
+    if (!blob || blob.size > 20 * 1024 * 1024) return false
+    const photoBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1])
+      reader.onerror = () => reject(new Error('Portrait encoding failed'))
+      reader.readAsDataURL(blob)
     })
-    let signed = await sign()
-    const entryId = signed.entryId, key = signed.key
-    await retry(async () => {
-      const res = await diagnosticFetch(signed.uploadUrl, {
-        method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: blob,
-        signal: AbortSignal.timeout(remainingTimeout(120_000)),
-      }, 'pool.put')
-      if (res.status === 403) {
-        // An expired presign may be renewed, but never under a new entry.
-        signed = await sign()
-        if (signed.entryId !== entryId || signed.key !== key) throw new PoolRequestError('Pool upload identity changed', false)
-        throw new PoolRequestError('Pool upload URL renewed', true)
-      }
-      check(res, 'pool.put')
-    })
-    // From this point retry only confirmation, not the uploaded bytes.
-    await retry(async () => {
-      const res = await diagnosticFetch('/api/relay/pool/join', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...identityBody, entryId, portraitKey: key, seed: args.seed }),
-        signal: AbortSignal.timeout(remainingTimeout(20_000)),
-      }, 'pool.join')
-      check(res, 'pool.join')
-      const data = await res.json() as { ok?: boolean; entryId?: string }
-      if (data.ok !== true || data.entryId !== entryId) throw new PoolRequestError('Pool confirmation identity mismatch', false)
-    })
-    console.log('[linconnu] pool entry created')
-    return true
-  } catch (err) {
-    console.warn('[linconnu] pool delivery failed:', err instanceof PoolRequestError ? err.message : 'network, timeout or decoding failure')
+    const body = JSON.stringify({ sessionId: args.sessionId, code: args.code, seed: args.seed, photoBase64 })
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const res = await diagnosticFetch('/api/pool-queue', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+          signal: AbortSignal.timeout(30_000),
+        }, 'pool.enqueue')
+        if (res.ok) {
+          const result = await res.json() as { queued?: boolean }
+          if (result.queued === true) return true
+          return false
+        }
+        if (res.status >= 400 && res.status < 500 && ![408,429].includes(res.status)) return false
+      } catch { /* a lost local acknowledgement can be retried safely */ }
+      if (attempt < 4) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt))
+    }
     return false
-  }
+  } catch { return false }
 }

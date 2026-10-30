@@ -123,19 +123,20 @@ export class Simulator {
   }
   async stopWorker() {
     const child = this.worker; this.worker = null; this.workerPort = null;
-    if (child && child.exitCode === null) {
+    if (child && child.exitCode === null && child.signalCode === null) {
       await new Promise(resolve => { child.once('exit', resolve); child.kill(); });
     }
   }
   async close() { await this.stopWorker(); this.generation++; this.uplink?.close(); }
   async snapshot() {
     let queue = [];
+    const poolQueue = this.workerPort ? await fetch(`http://127.0.0.1:${this.workerPort}/api/pool-queue/status`).then(r => r.json()).catch(() => []) : [];
     if (this.run) {
       const dir = join(this.run.dir, 'video-queue');
       const names = await readdir(dir).catch(() => []);
       queue = (await Promise.all(names.filter(n => n.endsWith('.json') && !n.endsWith('__done.json')).map(n => readFile(join(dir, n), 'utf8').then(JSON.parse).catch(() => null)))).filter(Boolean);
     }
-    return { run: this.run && { id: this.run.id, scenario: this.run.scenario, cfg: this.run.cfg }, events: this.events, queue, sessions: this.run?.sessions || {}, pool: this.run?.pool || {}, activeUploads: this.uplink?.jobs.size || 0, workerRunning: !!this.worker };
+    return { run: this.run && { id: this.run.id, scenario: this.run.scenario, cfg: this.run.cfg }, events: this.events, queue, poolQueue, sessions: this.run?.sessions || {}, pool: this.run?.pool || {}, activeUploads: this.uplink?.jobs.size || 0, workerRunning: !!this.worker };
   }
   fault(point, res) {
     const run = this.run;
@@ -171,7 +172,13 @@ export class Simulator {
     if (p === '/lab/report') return json(res, 200, await this.snapshot());
     if (!this.run) return json(res, 503, { error: 'Start a local scenario first' });
     const run = this.run, generation = this.generation;
-    if (p === '/api/relay/pool/sign-upload' && req.method === 'POST') {
+    if (p === '/api/pool-queue' && req.method === 'POST') {
+      if (!this.workerPort) return json(res, 503, { error: 'Local bridge stopped' });
+      const body = await readBody(req);
+      const response = await fetch(`http://127.0.0.1:${this.workerPort}/api/pool-queue`, { method: 'POST', body });
+      return json(res, response.status, await response.json());
+    }
+    if (['/api/relay/pool/sign-upload','/api/booth/pool/sign-upload'].includes(p) && req.method === 'POST') {
       if (!(await this.cloudReady(res)) || this.fault('pool.sign', res)) return;
       const body = JSON.parse(await readBody(req, 4096));
       const entryId = body.retryVersion === 1 ? poolRetry.uploadIdentity('local-twin', body.sessionId, body.code) : randomBytes(8).toString('hex');
@@ -180,7 +187,7 @@ export class Simulator {
       this.event('pool-sign', 'Pool portrait upload URL issued');
       return json(res, 200, { entryId, key, retryVersion: body.retryVersion === 1 ? 1 : undefined, uploadUrl: `${this.baseUrl}/storage/${sig}` });
     }
-    if (p === '/api/relay/pool/join' && req.method === 'POST') {
+    if (['/api/relay/pool/join','/api/booth/pool/join'].includes(p) && req.method === 'POST') {
       if (!(await this.cloudReady(res)) || this.fault('pool.join', res)) return;
       const body = JSON.parse(await readBody(req, 4096));
       if (!run.objects[body.portraitKey]) return json(res, 400, { error: 'Pool portrait not stored' });

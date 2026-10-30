@@ -2029,7 +2029,7 @@ function LostConnectionPrinting() {
             if (!ok) {
               sendBoothError({
                 code: 'print_failed', severity: 'warning',
-                message: "l'INCONNU: pool join failed after confirmation — entry NOT stored",
+                message: "l'INCONNU: portrait could not be saved to the local delivery queue — operator attention required",
                 context: { sessionId },
               })
             }

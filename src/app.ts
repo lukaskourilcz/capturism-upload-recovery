@@ -96,8 +96,8 @@ input('start').onclick = async () => {
       $('pool-status').textContent = 'Pool portrait: uploading…';
       // Same fire-and-forget parallel path as LostConnectionPrinting.
       void (fixedRun ? candidatePool : baselinePool).joinPool({ portraitDataUrl: testCanvas().toDataURL('image/png'), code: '000000', sessionId: `synthetic-${localRun.id}`, seed: true }).then(ok => {
-        $('pool-status').textContent = ok ? 'Pool portrait: saved.' : 'Pool portrait: FAILED (QR upload continues separately).';
-        void log(`Synthetic pool result: ${ok ? 'saved' : 'failed'}`);
+        $('pool-status').textContent = ok ? (fixedRun ? 'Pool portrait: saved locally; delivery queued.' : 'Pool portrait: saved.') : 'Pool portrait: FAILED (QR upload continues separately).';
+        void log(`Synthetic pool result: ${ok ? 'accepted' : 'failed'}`);
       });
     }
 
@@ -126,6 +126,8 @@ async function refresh() {
     const s = await api('/lab/state');
     if (!s.run) return;
     if (started) $('elapsed').textContent = `${Math.floor((Date.now() - started) / 1000)}s elapsed`;
+    if (s.poolQueue?.some(q => q.phase === 'done')) $('pool-status').textContent = 'Pool portrait: delivered from durable queue.';
+    else if (s.poolQueue?.some(q => ['blocked','corrupt'].includes(q.phase))) $('pool-status').textContent = 'Pool portrait: retained locally; operator attention required.';
     $('queue-count').textContent = `${s.queue.length} waiting`;
     const items = $('queue-items'); items.replaceChildren();
     if (!s.queue.length) items.textContent = s.events.some(e => e.stage === 'bridge' && e.detail.includes('delivered')) ? 'All queued clips delivered.' : 'No pending videos.';

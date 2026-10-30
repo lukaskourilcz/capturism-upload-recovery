@@ -27,6 +27,7 @@ const { WebSocketServer, WebSocket: WsClient } = require('ws');
 // console window, so the .bat files and the operator's mental model of
 // "two bridge windows" are unchanged.
 const videoQueue = require('./video-queue');
+const { createPoolQueue } = require('./pool-queue.cjs');
 const { isPortListening } = require('./probe-port');
 
 const { createDiagnostics, receiveDiagnostics } = require('./diagnostics.cjs');
@@ -1369,10 +1370,13 @@ function sendJSON(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
+const poolQueue = createPoolQueue({ relayUrl: RELAY_URL, boothId: BOOTH_ID, boothKey: BOOTH_KEY, onEvent: detail => { console.warn('[pool-queue] ' + detail); diagnostics.write({ stage: 'pool.delivery', outcome: detail.includes('delivered') ? 'ok' : detail.includes('operator') || detail.includes('error') ? 'error' : 'start' }); } });
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
   const method = req.method;
+  if (method === 'POST' && path === '/api/pool-queue') return poolQueue.handle(req, res);
   if (method === 'POST' && path === '/api/diagnostics') return receiveDiagnostics(req, res, diagnostics);
 
   // CORS preflight
@@ -1818,6 +1822,7 @@ process.on('beforeExit', () => { try { stopDaemon(); } catch { /* best-effort */
 server.listen(PORT, async () => {
   // Resumes anything left on disk by a previous run before printing the
   // banner — a PC that died mid-upload still delivers after a reboot.
+  if (RELAY_CONFIGURED) poolQueue.start();
   videoQueue.startWorker({
     relayUrl: RELAY_URL,
     boothId: BOOTH_ID,
