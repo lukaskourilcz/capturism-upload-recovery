@@ -29,7 +29,7 @@ export async function diagnosticFetch(url: string, init: RequestInit, stage: str
     return response
   } catch (e) {
     const name = (e as Error).name
-    diagnostic({ stage, trace, outcome: 'error', durationMs: performance.now() - start, error: name === 'TimeoutError' ? 'timeout' : name === 'AbortError' ? 'aborted' : 'network' })
+    diagnostic({ stage, trace, outcome: 'error', durationMs: performance.now() - start, error: ['TimeoutError', 'UploadDeadlineError'].includes(name) ? 'timeout' : name === 'AbortError' ? 'aborted' : 'network' })
     throw e
   }
 }

@@ -4,7 +4,7 @@ export const QR_PENDING_WAIT_MS = 10 * 60_000
 export const QR_SCAN_WINDOW_MS = 5 * 60_000
 
 export function qrInactivityDelay({
-  needsQr, hasToken, scanWindowMs = QR_SCAN_WINDOW_MS,
-}: { needsQr: boolean; hasToken: boolean; scanWindowMs?: number }): number {
-  return needsQr && !hasToken ? QR_PENDING_WAIT_MS : scanWindowMs
+  needsQr, hasToken, failed = false, deadlineAt, now = Date.now(), scanWindowMs = QR_SCAN_WINDOW_MS,
+}: { needsQr: boolean; hasToken: boolean; failed?: boolean; deadlineAt?: number; now?: number; scanWindowMs?: number }): number {
+  return needsQr && !hasToken && !failed ? Math.max(0, deadlineAt === undefined ? QR_PENDING_WAIT_MS : deadlineAt - now) : scanWindowMs
 }

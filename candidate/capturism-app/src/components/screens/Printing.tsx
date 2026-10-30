@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toPng } from 'html-to-image'
-import { useSessionStore } from '../../store/sessionStore'
+import { getSessionEpoch, useSessionStore } from '../../store/sessionStore'
 import { LogoHome } from '../layout/LogoHome'
 import { PageNumber } from '../layout/PageNumber'
 import { resolvePaperBg, resolvePaperInk, resolvePaperPalette, resolvePaperTint, resolveWordmarkInk, NULL_PAPER } from '../../lib/paperColor'
@@ -604,6 +604,7 @@ function CalendarPrinting() {
     const run = async () => {
       if (cloudUploadFiredRef.current) return
       cloudUploadFiredRef.current = true
+      const uploadEpoch = getSessionEpoch()
       await new Promise(r => setTimeout(r, 600))
       if (!cardRef.current) return
       try {
@@ -649,6 +650,7 @@ function CalendarPrinting() {
         // in seconds instead of straddling the 120s timeout.
         const uploadPhoto = await photoBlobForUpload(dataUrl)
         const token = await uploadSessionToCloud({
+          sessionEpoch: uploadEpoch,
           retryForMs: SESSION_UPLOAD_PATIENCE_MS, // background flow: ride out a network blip
           photo: uploadPhoto.blob,
           photoContentType: uploadPhoto.contentType,
@@ -912,6 +914,7 @@ function PhotoPrinting() {
       // a second concurrent run() bails immediately.
       if (cloudUploadFiredRef.current) return
       cloudUploadFiredRef.current = true
+      const uploadEpoch = getSessionEpoch()
       await new Promise(r => setTimeout(r, 600))
       if (!cardRef.current) return
       try {
@@ -948,6 +951,7 @@ function PhotoPrinting() {
         // in seconds instead of straddling the 120s timeout.
         const uploadPhoto = await photoBlobForUpload(dataUrl)
         const token = await uploadSessionToCloud({
+          sessionEpoch: uploadEpoch,
           retryForMs: SESSION_UPLOAD_PATIENCE_MS, // background flow: ride out a network blip
           photo: uploadPhoto.blob,
           photoContentType: uploadPhoto.contentType,
@@ -1542,6 +1546,7 @@ function PhotoIdPrinting() {
   useEffect(() => {
     if (photos.length === 0) return
     const renderAndUpload = async () => {
+      const uploadEpoch = getSessionEpoch()
       try {
         // Brief delay so the "printing..." phase has time to show on screen.
         await new Promise(r => setTimeout(r, 800))
@@ -1614,6 +1619,7 @@ function PhotoIdPrinting() {
               // instead of straddling the 120s timeout.
               const uploadPhoto = await photoBlobForUpload(dataUrl)
               return uploadSessionToCloud({
+                sessionEpoch: uploadEpoch,
                 photo: uploadPhoto.blob,
                 photoContentType: uploadPhoto.contentType,
                 video: sessionVideo || undefined,
@@ -1998,6 +2004,7 @@ function LostConnectionPrinting() {
     const run = async () => {
       if (cloudUploadFiredRef.current) return
       cloudUploadFiredRef.current = true
+      const uploadEpoch = getSessionEpoch()
       await new Promise(r => setTimeout(r, 600))
       if (!cardRef.current) return
       try {
@@ -2048,6 +2055,7 @@ function LostConnectionPrinting() {
           }))
           const uploadPhoto = await photoBlobForUpload(dataUrl)
           const token = await uploadSessionToCloud({
+            sessionEpoch: uploadEpoch,
             retryForMs: SESSION_UPLOAD_PATIENCE_MS, // background flow: ride out a network blip
             photo: uploadPhoto.blob,
             photoContentType: uploadPhoto.contentType,

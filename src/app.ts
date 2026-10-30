@@ -1,3 +1,4 @@
+import { expireQrUpload, getQrUploadState, retryQrUpload, subscribeQrUpload } from '../candidate/capturism-app/src/lib/qrUploadState';
 import QRCode from 'qrcode';
 import { resetSession, getSessionEpoch } from './adapters';
 
@@ -69,16 +70,56 @@ function endSession() {
   resetSession(); ended = true; clearTimeout(timer);
   $('status').textContent = 'Kiosk session ended.';
   $('detail').textContent = 'In-flight uploads may finish, but their token must not appear in the next session.';
-  $('qr').hidden = true; $('download').hidden = true; qrReady = false;
+  $('qr').hidden = true; $('download').hidden = true; input('retry-download').hidden = true; qrReady = false;
   void log('Kiosk session reset: epoch incremented; checking late-upload guard');
 }
 input('end').onclick = endSession;
 input('bridge').onclick = async () => { try { await api('/lab/restart-bridge', {}); } catch (e) { $('detail').textContent = String(e); } };
+async function showQr(token: string) {
+  const epoch = getSessionEpoch();
+  if (ended) return;
+  const url = `${location.origin}/d/${token}`;
+  await QRCode.toCanvas($('qr'), url, { width: 136, margin: 1, color: { dark: '#294b34', light: '#fffef9' } });
+  if (ended || epoch !== getSessionEpoch()) return;
+  $('qr').hidden = false; const link = $<HTMLAnchorElement>('download'); link.href = url; link.hidden = false;
+  $('status').textContent = 'Your QR is ready.';
+  $('detail').textContent = `Photo confirmed in ${((Date.now() - started) / 1000).toFixed(1)} seconds. Videos continue through the bridge queue.`;
+  if (fixedRun) { clearTimeout(timer); timer = setTimeout(endSession, scanWindowMs); }
+  $('step-qr').classList.add('done'); qrReady = true; await log('QR shown after original uploader returned the token');
+  input('retry-download').hidden = true;
+}
+function showUploadFailure(err: unknown) {
+  const timedOut = (err as Error).name === 'UploadDeadlineError';
+  $('status').textContent = timedOut ? 'Upload timed out.' : 'Download not ready.';
+  $('detail').textContent = 'Try the download again. This only retries the download; it does not repeat printing or payment.';
+  input('retry-download').hidden = !fixedRun || !getQrUploadState().canRetry || ended;
+  clearTimeout(timer); timer = setTimeout(endSession, scanWindowMs);
+}
+input('retry-download').onclick = async () => {
+  if (busy || ended) return;
+  busy = true; input('retry-download').disabled = true;
+  const epoch = getSessionEpoch();
+  $('status').textContent = 'Retrying your download…';
+  try {
+    const token = await retryQrUpload();
+    if (!ended && epoch === getSessionEpoch()) await showQr(token);
+  } catch (err) { if (!ended) showUploadFailure(err); }
+  finally { busy = false; input('retry-download').disabled = false; }
+};
+subscribeQrUpload(() => {
+  if (!fixedRun || ended) return;
+  const state = getQrUploadState();
+  if (state.phase === 'uploading') {
+    input('retry-download').hidden = true;
+    clearTimeout(timer); timer = setTimeout(expireQrUpload, Math.max(0, (state.deadlineAt || Date.now()) - Date.now()));
+  } else if (state.reason === 'preparation') showUploadFailure(new Error('Preparation failed'));
+});
+
 input('start').onclick = async () => {
   if (busy) return;
   clearTimeout(timer);
   busy = true; ended = false; qrReady = false; input('start').disabled = true; input('end').disabled = false; input('bridge').disabled = false;
-  $('qr').hidden = true; $('download').hidden = true;
+  $('qr').hidden = true; $('download').hidden = true; input('retry-download').hidden = true;
   for (const el of document.querySelectorAll('.steps>div')) el.classList.remove('done');
   resetSession();
   try {
@@ -88,7 +129,7 @@ input('start').onclick = async () => {
     $('status').textContent = 'Preparing your download…'; $('detail').textContent = 'Waiting for photo upload and confirmation.';
     scanWindowMs = Math.max(1, Math.min(900, Number(input('reset').value) || 300)) * 1000;
     const waitMs = fixedRun ? qrInactivityDelay({ needsQr: true, hasToken: false, scanWindowMs }) : scanWindowMs;
-    timer = setTimeout(endSession, waitMs);
+    timer = setTimeout(fixedRun ? expireQrUpload : endSession, waitMs);
     await log(`Version: ${fixedRun ? 'local fix' : 'baseline'}; scan window ${scanWindowMs}ms; pending timeout ${waitMs}ms`);
     const epoch = getSessionEpoch();
     const asset = await photo();
@@ -106,19 +147,14 @@ input('start').onclick = async () => {
     if (epoch !== getSessionEpoch()) throw new Error('Session ended during preparation; no upload started');
     $('step-prep').classList.add('done');
     await log(`Prepared photo: ${Math.round(asset.blob.size / 1024)} KiB. Starting original uploadSessionToCloud.`);
-    const token = await uploader.uploadSessionToCloud({ photo: asset.blob, photoContentType: asset.contentType, layoutVideo: video, storyVideo: video, retryForMs: uploader.SESSION_UPLOAD_PATIENCE_MS });
+    const token = await uploader.uploadSessionToCloud({ photo: asset.blob, photoContentType: asset.contentType, layoutVideo: video, storyVideo: video, retryForMs: fixedRun ? Math.max(1, Math.min(600, Number(input('upload-budget').value) || 600)) * 1000 : uploader.SESSION_UPLOAD_PATIENCE_MS });
     if (ended) return;
-    const url = `${location.origin}/d/${token}`;
-    await QRCode.toCanvas($('qr'), url, { width: 136, margin: 1, color: { dark: '#294b34', light: '#fffef9' } });
-    $('qr').hidden = false; const link = $<HTMLAnchorElement>('download'); link.href = url; link.hidden = false;
-    $('status').textContent = 'Your QR is ready.';
-    $('detail').textContent = `Photo confirmed in ${((Date.now() - started) / 1000).toFixed(1)} seconds. Videos continue through the bridge queue.`;
-    if (fixedRun) { clearTimeout(timer); timer = setTimeout(endSession, scanWindowMs); }
-    $('step-qr').classList.add('done'); qrReady = true; await log('QR shown after original uploader returned the token');
+    await showQr(token);
   } catch (err) {
-    $('status').textContent = ended ? 'Late upload safely discarded.' : 'Upload did not complete.';
-    $('detail').textContent = (err as Error).message; void log((err as Error).message);
-  } finally { busy = false; input('start').disabled = false; if (!qrReady) clearTimeout(timer); }
+    if (ended) { $('status').textContent = 'Late upload safely discarded.'; $('detail').textContent = 'Session ended; no QR retained.'; }
+    else showUploadFailure(err);
+    void log((err as Error).message);
+  } finally { busy = false; input('start').disabled = false; if (ended) clearTimeout(timer); }
 };
 
 async function refresh() {

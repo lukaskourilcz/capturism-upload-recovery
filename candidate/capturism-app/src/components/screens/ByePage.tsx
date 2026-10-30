@@ -1,14 +1,15 @@
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { DownloadQR } from '../DownloadQR'
-import { useSessionStore } from '../../store/sessionStore'
+import { getSessionEpoch, useSessionStore } from '../../store/sessionStore'
 import { PageHeader } from '../layout/PageHeader'
 import { FigmaGlassCard } from '../glass/FigmaGlassCard'
 import { SessionVideoBackground } from '../layout/SessionVideoBackground'
 import { clearSessionVideo } from '../../lib/sessionVideo'
 import { applyPresetWithRetry } from '../../lib/lightsClient'
 import { qrInactivityDelay } from '../../lib/qrWaitPolicy'
+import { expireQrUpload, getQrUploadState, retryQrUpload, subscribeQrUpload } from '../../lib/qrUploadState'
 
 // Frame: 1920×1080. Centered glass panel (868×620 at left:526, top:277)
 // holds the thank-you message, share prompt, QR code, and restart button.
@@ -26,9 +27,16 @@ export default function ByePage() {
   const reset = useSessionStore((s) => s.reset)
   const language = useSessionStore((s) => s.language)
   const cloudToken = useSessionStore((s) => s.cloudToken)
+  const setCloudToken = useSessionStore((s) => s.setCloudToken)
+  const upload = useSyncExternalStore(subscribeQrUpload, getQrUploadState)
+  const failed = upload.phase === 'failed' && !cloudToken
   const shootType = useSessionStore((s) => s.shootType)
   const wantsQrCode = useSessionStore((s) => s.wantsQrCode)
   const isPhotoId = shootType === 'photo_id'
+
+  useEffect(() => {
+    if (upload.phase === 'ready' && upload.token && upload.epoch === getSessionEpoch()) setCloudToken(upload.token)
+  }, [upload, setCloudToken])
 
   // Session is over — kill the studio lights so the booth goes back to
   // its idle "dark" state until the next customer reaches LightingAdjust
@@ -39,11 +47,13 @@ export default function ByePage() {
     applyPresetWithRetry('off')
   }, [])
 
-  // Pending downloads get up to ten minutes of inactivity, matching the
-  // uploader patience. When the token arrives this effect re-arms a fresh
-  // five-minute scanning window. Explicit restart still resets immediately.
+  // Touch cannot extend a pending upload's absolute deadline. Expiry shows
+  // recovery rather than immediately discarding the customer's session.
+  // Ready/failed states get five minutes to scan/retry before privacy reset.
   useEffect(() => {
     let timerId: number | null = null
+    const pending = wantsQrCode && !cloudToken && !failed
+    const pendingDeadline = upload.deadlineAt ?? Date.now() + 10 * 60_000
 
     const goHome = () => {
       // Drop the recorded session video so the next customer doesn't
@@ -54,8 +64,8 @@ export default function ByePage() {
     }
     const arm = () => {
       if (timerId !== null) window.clearTimeout(timerId)
-      timerId = window.setTimeout(goHome, qrInactivityDelay({
-        needsQr: wantsQrCode, hasToken: !!cloudToken, scanWindowMs: AUTO_RESET_MS,
+      timerId = window.setTimeout(pending ? expireQrUpload : goHome, qrInactivityDelay({
+        needsQr: wantsQrCode, hasToken: !!cloudToken, failed, deadlineAt: pendingDeadline, scanWindowMs: AUTO_RESET_MS,
       }))
     }
 
@@ -68,7 +78,7 @@ export default function ByePage() {
       window.removeEventListener('pointerdown', arm)
       window.removeEventListener('keydown', arm)
     }
-  }, [navigate, reset, wantsQrCode, cloudToken])
+  }, [navigate, reset, wantsQrCode, cloudToken, failed, upload.deadlineAt])
 
   const handleRestart = () => {
     clearSessionVideo()
@@ -93,6 +103,11 @@ export default function ByePage() {
       digital: 'RECEVEZ VOS PHOTOS EN NUMÉRIQUE',
       scan: 'SCANNEZ POUR TÉLÉCHARGER SUR VOTRE TÉLÉPHONE',
       restart: 'RECOMMENCER',
+      retry: 'RÉESSAYER LE QR',
+      help: 'DEMANDEZ DE L’AIDE',
+      timeout: 'La connexion prend trop de temps. Réessayez pour obtenir votre QR.',
+      failed: 'Le téléchargement n’a pas abouti. Réessayez ou demandez de l’aide à l’équipe.',
+      preparation: 'Vos photos numériques n’ont pas pu être préparées. Demandez de l’aide à l’équipe.',
     },
     en: {
       thanks: 'THANK YOU!',
@@ -103,6 +118,11 @@ export default function ByePage() {
       digital: 'GET YOUR PHOTOS DIGITALLY',
       scan: 'SCAN TO DOWNLOAD ON YOUR PHONE',
       restart: 'START OVER',
+      retry: 'RETRY DOWNLOAD',
+      help: 'ASK THE STUDIO',
+      timeout: 'The connection is taking too long. Try again to get your QR.',
+      failed: 'The download could not be prepared. Try again or ask the studio team.',
+      preparation: 'Your digital photos could not be prepared. Please ask the studio team.',
     },
     ko: {
       thanks: '감사합니다!',
@@ -113,6 +133,11 @@ export default function ByePage() {
       digital: '디지털 사진 받기',
       scan: '휴대폰으로 다운로드하려면 스캔하세요',
       restart: '다시 시작',
+      retry: '다운로드 재시도',
+      help: '직원에게 문의',
+      timeout: '연결이 너무 오래 걸립니다. QR 코드를 받으려면 다시 시도하세요.',
+      failed: '다운로드를 준비하지 못했습니다. 다시 시도하거나 직원에게 문의하세요.',
+      preparation: '디지털 사진을 준비하지 못했습니다. 직원에게 문의하세요.',
     },
   }[language]
 
@@ -304,7 +329,16 @@ export default function ByePage() {
                   boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
                 }}
               >
-                <DownloadQR
+                {failed ? (
+                  <button
+                    type="button"
+                    disabled={!upload.canRetry}
+                    onClick={() => { void retryQrUpload().catch(() => {}) }}
+                    style={{ width: '100%', height: '100%', border: 'none', background: '#FFFFFF', color: '#111111', borderRadius: 5, padding: 8, fontSize: 15, fontWeight: 600, cursor: upload.canRetry ? 'pointer' : 'default' }}
+                  >
+                    {upload.canRetry ? labels.retry : labels.help}
+                  </button>
+                ) : <DownloadQR
                   cloudToken={cloudToken}
                   size={84}
                   fgColor="#000000"
@@ -314,17 +348,17 @@ export default function ByePage() {
                       : language === 'ko' ? '준비 중…'
                         : 'PRÉPARATION…'
                   }
-                />
+                />}
               </div>
 
               {/* SCANNEZ POUR TÉLÉCHARGER... — Inter 300 15px */}
               <div
                 style={{
                   position: 'absolute',
-                  left: `${741 - PANEL.x}px`,
+                  left: `${(PANEL.w - 660) / 2}px`,
                   top: `${724 - PANEL.y}px`,
-                  width: '439px',
-                  height: '18px',
+                  width: '660px',
+                  height: '36px',
                   fontFamily: "'Inter', sans-serif",
                   fontWeight: 300,
                   fontSize: '15px',
@@ -332,10 +366,12 @@ export default function ByePage() {
                   letterSpacing: '0.05em',
                   textAlign: 'center',
                   color: '#FDFDFD',
-                  whiteSpace: 'nowrap',
+                  whiteSpace: 'normal',
                 }}
               >
-                {labels.scan}
+                <span role={failed ? 'alert' : undefined}>
+                  {failed ? upload.reason === 'timeout' ? labels.timeout : upload.reason === 'preparation' ? labels.preparation : labels.failed : labels.scan}
+                </span>
               </div>
             </>
           )}

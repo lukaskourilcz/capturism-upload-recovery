@@ -20,6 +20,9 @@ export const presets = {
   idle_join: { label: 'After idle: first pool confirmation fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
   idle_ack: { label: 'After idle: pool saved but response lost', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
   idle_persist: { label: 'After idle: first pool record save fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
+  qr_idle_confirm: { label: 'After idle: first QR confirmation fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 1, contention: 0 },
+  qr_idle_ack: { label: 'After idle: QR saved, response lost', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
+  qr_idle_save: { label: 'After idle: first QR record save fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 1, contention: 0 },
 };
 
 export async function readBody(req, limit = 32 * 1024 * 1024) {
@@ -302,6 +305,9 @@ export class Simulator {
       // Explicitly simplified relay: merge keys; no R2 recovery, auth or expiry sweep.
       run.sessions[b.token] = { ...run.sessions[b.token], ...b };
       this.event('confirmed', 'Session registered; download available', { token: b.token });
+      if (run.scenario === 'qr_idle_ack' && !run.faults.has('photo.ack')) {
+        run.faults.add('photo.ack'); this.event('idle-fault', 'Photo confirmation saved, HTTP acknowledgement lost'); res.destroy(); return;
+      }
       return json(res, 200, { ok: true, downloadUrl: `${this.baseUrl}/d/${b.token}` });
     }
     if (p.startsWith('/api/download/')) {

@@ -1,4 +1,6 @@
-import { diagnosticFetch } from './diagnostics'
+import { createUploadDeadline, UploadDeadlineError, SESSION_ENDED_MSG, type UploadDeadline } from './uploadDeadline'
+import { resetQrUpload, setQrUploadState } from './qrUploadState'
+import { diagnostic, diagnosticFetch } from './diagnostics'
 /**
  * Booth → Relay → R2 upload flow.
  *
@@ -10,15 +12,9 @@ import { diagnosticFetch } from './diagnostics'
  * The phone QR encodes `${DOWNLOAD_BASE}/d/<token>`. The download page hits
  * `${RELAY_URL}/api/download/<token>` to get a signed GET URL.
  *
- * Resilience: every relay/R2 fetch is wrapped in fetchWithRetry — up to 3
- * attempts with exponential backoff (1s / 2s / 4s) and a 60s per-attempt
- * timeout. This is the single most-impactful change for the booth: Render's
- * free tier sleeps the relay after 15 min idle and cold-starts take 30-60s.
- * One retry past a transient timeout makes the whole pipeline survive that.
- *
- * Video uploads are wrapped in their OWN try/catch inside uploadSessionToCloud
- * so a flaky video can't kill the photo commit — the customer still gets a
- * working QR with at least their photo, even if the videos didn't make it.
+ * Signing, PUT, confirmation bodies and retry waits share one absolute
+ * deadline: ten minutes for background flows, two minutes for the legacy
+ * single-pass caller. Video handoff is independent and never gates the QR.
  */
 import { sendBoothError } from './boothRelay'
 import { getSessionEpoch } from '../store/sessionStore'
@@ -76,53 +72,41 @@ interface SignUploadResponse {
  * Logs every attempt so the kiosk console makes the retry behaviour visible
  * — extremely useful for diagnosing "QR didn't appear" reports.
  */
-async function fetchWithRetry(
+async function fetchWithRetry<T = Response>(
   url: string,
   init: RequestInit,
   label: string,
-  { maxRetries = 3, timeoutMs = 60_000 } = {},
-): Promise<Response> {
+  { maxRetries = 3, timeoutMs = 60_000, deadline, read }: {
+    maxRetries?: number; timeoutMs?: number; deadline?: UploadDeadline
+    read?: (response: Response) => Promise<T>
+  } = {},
+): Promise<T> {
+  // Videos are independent bridge handoffs. Photo callers always supply
+  // the one shared root budget; nested helpers never renew that budget.
+  const budget = deadline ?? createUploadDeadline(maxRetries * (timeoutMs + 8_000), () => true)
   let lastErr: unknown = null
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    try {
-      const stage = label.startsWith('R2 PUT') ? 'photo.put' : label === 'sign-upload' ? 'photo.sign' : label === 'photos-ready' ? 'photo.confirm' : 'video.enqueue'
-      const res = await diagnosticFetch(url, { ...init, signal: controller.signal }, stage)
-      clearTimeout(timer)
-      // 4xx is permanent — don't retry. 2xx is success. 5xx is retryable.
-      if (res.ok) {
-        if (attempt > 1) {
-          console.log(`[UPLOAD] ${label}: succeeded on attempt ${attempt}`)
-        }
-        return res
+  try {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      budget.check()
+      try {
+        return await budget.attempt(async signal => {
+          const stage = label.startsWith('R2 PUT') ? 'photo.put' : label === 'sign-upload' ? 'photo.sign' : label === 'photos-ready' ? 'photo.confirm' : 'video.enqueue'
+          const res = await diagnosticFetch(url, { ...init, signal }, stage)
+          if (res.ok) return read ? await read(res) : res as unknown as T
+          await res.body?.cancel()
+          throw Object.assign(new Error(`${label} failed: ${res.status}`), { status: res.status })
+        }, timeoutMs)
+      } catch (err) {
+        budget.check()
+        lastErr = err
+        const status = (err as { status?: number }).status
+        if (status && status >= 400 && status < 500 && ![408, 429].includes(status)) throw err
+        console.warn(`[UPLOAD] ${label} attempt ${attempt}/${maxRetries} failed`)
       }
-      if (res.status >= 400 && res.status < 500) {
-        const body = await res.text().catch(() => '')
-        throw new Error(`${label} failed: ${res.status} ${body.slice(0, 200)}`)
-      }
-      // 5xx — fall through to retry
-      lastErr = new Error(`${label} failed: ${res.status}`)
-      console.warn(`[UPLOAD] ${label} attempt ${attempt}/${maxRetries} got ${res.status}`)
-    } catch (err) {
-      clearTimeout(timer)
-      lastErr = err
-      // If the error is the AbortController firing, we know it's a timeout.
-      const msg = (err as Error).name === 'AbortError'
-        ? `${label} timed out after ${timeoutMs}ms`
-        : (err as Error).message || String(err)
-      console.warn(`[UPLOAD] ${label} attempt ${attempt}/${maxRetries} threw: ${msg}`)
-      // 4xx-style errors (already thrown above) propagate as-is and we
-      // re-throw them without retrying.
-      if (msg.includes('failed: 4')) throw err
+      if (attempt < maxRetries) await budget.sleep(1_000 * 2 ** (attempt - 1))
     }
-    if (attempt < maxRetries) {
-      const backoffMs = 1_000 * Math.pow(2, attempt - 1) // 1s, 2s, 4s
-      console.log(`[UPLOAD] ${label}: waiting ${backoffMs}ms before retry`)
-      await new Promise((r) => setTimeout(r, backoffMs))
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(`${label} failed after ${maxRetries} attempts`)
+    throw lastErr instanceof Error ? lastErr : new Error(`${label} failed`)
+  } finally { if (!deadline) budget.dispose() }
 }
 
 type AssetKind = 'photo' | 'video' | 'layout' | 'story'
@@ -144,6 +128,7 @@ async function signUpload(
   contentType: string,
   token?: string,
   kind?: AssetKind,
+  deadline?: UploadDeadline,
 ): Promise<SignUploadResponse> {
   // maxRetries 5, not the default 3. The default gives up after ~7 s
   // (1 s + 2 s of backoff), which is far too impatient for a free-tier
@@ -155,11 +140,11 @@ async function signUpload(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contentType, token, kind }),
-  }, 'sign-upload', { maxRetries: 5 })
-  return res.json()
+  }, 'sign-upload', { maxRetries: 5, deadline, read: async response => await response.json() as SignUploadResponse })
+  return res
 }
 
-async function putToR2(uploadUrl: string, blob: Blob, contentType: string): Promise<void> {
+async function putToR2(uploadUrl: string, blob: Blob, contentType: string, deadline: UploadDeadline): Promise<void> {
   // R2 PUT can be large (multi-MB video) — give it 2 minutes per attempt.
   // Size + elapsed are logged on every PUT: the booth's uplink is the
   // bottleneck that decides whether the QR appears, and "photo PUT was
@@ -171,7 +156,7 @@ async function putToR2(uploadUrl: string, blob: Blob, contentType: string): Prom
     method: 'PUT',
     headers: { 'Content-Type': contentType },
     body: blob,
-  }, `R2 PUT (${sizeKb} KB ${contentType})`, { timeoutMs: 120_000 })
+  }, `R2 PUT (${sizeKb} KB ${contentType})`, { timeoutMs: 120_000, deadline, read: async response => { await response.body?.cancel() } })
   console.log(`[UPLOAD] R2 PUT done: ${sizeKb} KB ${contentType} in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
 }
 
@@ -241,12 +226,13 @@ async function commitPhotosReady(
    * carries the real keys.
    */
   videosPending?: boolean,
+  deadline?: UploadDeadline,
 ): Promise<void> {
   await fetchWithRetry(`/api/relay/photos-ready`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token, photoKey, videoKey, layoutVideoKey, storyVideoKey, videosPending }),
-  }, 'photos-ready', { maxRetries: 5 })
+  }, 'photos-ready', { maxRetries: 5, deadline, read: async response => { await response.text() } })
 }
 
 /**
@@ -310,16 +296,12 @@ async function queueVideoWithBridge(
 }
 
 /** How long a background flow keeps retrying a photo upload. Matched to the
- *  relay's VIDEO_PENDING_GRACE_MS: the session ends well before this anyway. */
+ *  photo network flow. Manual recovery starts a fresh bounded window. */
 export const SESSION_UPLOAD_PATIENCE_MS = 10 * 60_000
-
-const SESSION_ENDED_MSG =
-  'session ended before the upload finished — token discarded so it cannot ' +
-  "leak into the next customer's session"
 
 /** 4xx responses that retrying cannot fix. 403 is deliberately NOT here: an
  *  expired signed URL answers 403, and the next attempt signs a fresh one. */
-const PERMANENT_FAILURE = /failed: (400|401|404|405|413|415|422)\b/
+const PERMANENT_FAILURE = /failed: (400|401|404|405|409|413|415|422)\b/
 
 /**
  * Sign, PUT and commit the photo — and, if retryForMs allows, do it again
@@ -342,33 +324,37 @@ async function uploadPhotoWithRetry(args: {
   willHaveVideos: boolean
   retryForMs: number
   epoch: number
+  deadline: UploadDeadline
+  checkpoint: { token?: string; uploaded?: SignUploadResponse }
 }): Promise<SignUploadResponse> {
-  const deadline = Date.now() + args.retryForMs
-  let token: string | undefined
-  let uploaded: SignUploadResponse | undefined
+  const { deadline, checkpoint } = args
   let attempt = 0
   for (;;) {
     attempt += 1
+    deadline.check()
     if (getSessionEpoch() !== args.epoch) throw new Error(SESSION_ENDED_MSG)
     try {
       // A failed confirmation does not mean the PUT failed. Keep the
       // completed upload and retry its registration without saturating
       // the booth uplink again. Failed PUTs still get fresh signed URLs.
-      if (!uploaded) {
-        const signed = await signUpload(args.photoCt, token, 'photo')
-        token = signed.token
-        await putToR2(signed.uploadUrl, args.photo, args.photoCt)
-        uploaded = signed
+      if (!checkpoint.uploaded) {
+        const signed = await signUpload(args.photoCt, checkpoint.token, 'photo', deadline)
+        deadline.check()
+        checkpoint.token = signed.token
+        await putToR2(signed.uploadUrl, args.photo, args.photoCt, deadline)
+        checkpoint.uploaded = signed
       }
-      await commitPhotosReady(uploaded.token, uploaded.key, undefined, undefined, undefined, args.willHaveVideos)
+      await commitPhotosReady(checkpoint.uploaded.token, checkpoint.uploaded.key, undefined, undefined, undefined, args.willHaveVideos, deadline)
       if (attempt > 1) console.log(`[UPLOAD] photo landed on attempt ${attempt}`)
-      return uploaded
+      deadline.check()
+      return checkpoint.uploaded
     } catch (err) {
+      deadline.check()
       const msg = (err as Error).message
       const waitMs = Math.min(30_000, 2_000 * attempt)
-      if (PERMANENT_FAILURE.test(msg) || Date.now() + waitMs >= deadline) throw err
+      if (PERMANENT_FAILURE.test(msg) || args.retryForMs <= 0) throw err
       console.warn(`[UPLOAD] photo attempt ${attempt} failed (${msg}) — retrying in ${Math.round(waitMs / 1000)}s`)
-      await new Promise((r) => setTimeout(r, waitMs))
+      await deadline.sleep(waitMs)
     }
   }
 }
@@ -402,7 +388,7 @@ async function uploadPhotoWithRetry(args: {
  * second commit just updates the same session entry — refresh and the
  * video buttons appear.
  */
-export async function uploadSessionToCloud(opts: {
+type SessionUploadOptions = {
   photo: Blob
   photoContentType?: string
   video?: Blob
@@ -411,7 +397,7 @@ export async function uploadSessionToCloud(opts: {
   storyVideo?: Blob
   /**
    * Keep retrying the PHOTO upload, with backoff, for up to this long.
-   * Default 0 = one attempt, as before.
+   * Default 0 = one outer attempt with a two-minute total deadline.
    *
    * Opt-in because callers differ: the background flows (Calendar, Photo,
    * l'INCONNU) can wait out a network blip without anyone noticing,
@@ -420,7 +406,59 @@ export async function uploadSessionToCloud(opts: {
    * SESSION_UPLOAD_PATIENCE_MS from a flow that runs in the background.
    */
   retryForMs?: number
-}): Promise<string> {
+  /** Captured before rendering, so late preparation cannot enter a new session. */
+  sessionEpoch?: number
+}
+export const DEFAULT_UPLOAD_DEADLINE_MS = 120_000
+let uploadGeneration = 0
+export function uploadSessionToCloud(opts: SessionUploadOptions): Promise<string> {
+  const epoch = opts.sessionEpoch ?? getSessionEpoch()
+  if (epoch !== getSessionEpoch()) return Promise.reject(new Error(SESSION_ENDED_MSG))
+  resetQrUpload()
+  const generation = ++uploadGeneration
+  const checkpoint: { token?: string; uploaded?: SignUploadResponse } = {}
+  let retained: SessionUploadOptions | undefined = { ...opts }
+  let running: Promise<string> | undefined
+  const isCurrent = () => epoch === getSessionEpoch() && generation === uploadGeneration
+  const run = (manual = false): Promise<string> => {
+    if (running) return running
+    if (!retained || !isCurrent()) return Promise.reject(new Error(SESSION_ENDED_MSG))
+    const input = retained
+    const requested = manual ? SESSION_UPLOAD_PATIENCE_MS : input.retryForMs
+    const duration = requested && requested > 0 ? Math.min(requested, SESSION_UPLOAD_PATIENCE_MS) : DEFAULT_UPLOAD_DEADLINE_MS
+    const deadline = createUploadDeadline(duration, isCurrent)
+    const startedAt = Date.now()
+    diagnostic({ stage: 'photo.flow', outcome: 'start' })
+    const cancel = () => { retained = undefined; deadline.cancel() }
+    setQrUploadState({ phase: 'uploading', epoch, canRetry: false, deadlineAt: deadline.deadlineAt }, { cancel, expire: deadline.expire })
+    running = (async () => {
+      try {
+        if (!cloudUploadConfigured) {
+          await deadline.attempt(async signal => {
+            const res = await fetch('/api/relay/configured', { signal })
+            const config = await res.json() as { configured?: boolean }
+            if (res.ok && typeof config.configured === 'boolean') cloudUploadConfigured = config.configured
+          }, 60_000)
+        }
+        const token = await performSessionUpload({ ...input, retryForMs: manual ? SESSION_UPLOAD_PATIENCE_MS : input.retryForMs }, epoch, deadline, checkpoint)
+        deadline.check()
+        retained = undefined
+        setQrUploadState({ phase: 'ready', canRetry: false, epoch, token })
+        deadline.check()
+        diagnostic({ stage: 'photo.flow', outcome: 'ok', durationMs: Date.now() - startedAt })
+        return token
+      } catch (err) {
+        diagnostic({ stage: 'photo.flow', outcome: 'error', durationMs: Date.now() - startedAt, error: err instanceof UploadDeadlineError ? 'timeout' : !isCurrent() ? 'aborted' : 'other' })
+        if (isCurrent() && retained) setQrUploadState({ phase: 'failed', canRetry: true, epoch, reason: err instanceof UploadDeadlineError ? 'timeout' : 'upload' }, { retry: () => run(true), cancel })
+        throw err
+      } finally { deadline.dispose(); running = undefined }
+    })()
+    return running
+  }
+  return run()
+}
+
+async function performSessionUpload(opts: SessionUploadOptions, epochAtStart: number, deadline: UploadDeadline, checkpoint: { token?: string; uploaded?: SignUploadResponse }): Promise<string> {
   if (!cloudUploadConfigured) {
     throw new Error('Cloud upload not configured — bridge says RELAY_URL/BOOTH_ID/BOOTH_KEY are unset')
   }
@@ -429,7 +467,6 @@ export async function uploadSessionToCloud(opts: {
   const t0 = Date.now()
   // Which customer's session is this upload FOR? Captured now, checked
   // after the photo commits. See the guard below for why.
-  const epochAtStart = getSessionEpoch()
 
   // Photo first — its token becomes the session token everyone uses.
   // The relay's allow-list checks bare MIME types ("video/webm" etc.), so
@@ -447,6 +484,7 @@ export async function uploadSessionToCloud(opts: {
     willHaveVideos,
     retryForMs: opts.retryForMs ?? 0,
     epoch: epochAtStart,
+    deadline, checkpoint,
   })
   console.log(`[UPLOAD] ✅ Photo committed in ${((Date.now() - t0) / 1000).toFixed(1)}s — token=${photoSigned.token} (videos uploading in background)`)
 
