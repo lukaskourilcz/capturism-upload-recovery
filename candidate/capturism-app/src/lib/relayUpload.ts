@@ -1,3 +1,4 @@
+import { diagnosticFetch } from './diagnostics'
 /**
  * Booth → Relay → R2 upload flow.
  *
@@ -86,7 +87,8 @@ async function fetchWithRetry(
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      const res = await fetch(url, { ...init, signal: controller.signal })
+      const stage = label.startsWith('R2 PUT') ? 'photo.put' : label === 'sign-upload' ? 'photo.sign' : label === 'photos-ready' ? 'photo.confirm' : 'video.enqueue'
+      const res = await diagnosticFetch(url, { ...init, signal: controller.signal }, stage)
       clearTimeout(timer)
       // 4xx is permanent — don't retry. 2xx is success. 5xx is retryable.
       if (res.ok) {

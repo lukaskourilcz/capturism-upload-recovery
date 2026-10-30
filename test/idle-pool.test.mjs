@@ -1,0 +1,65 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { build } from 'esbuild';
+import { mkdtemp, readFile, rm, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createTwin } from '../server.mjs';
+import diagnostics from '../candidate/diagnostics.cjs';
+
+test('persistent diagnostics are bounded, redact payloads, survive reopen and fail safely', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'capturism-logs-'));
+  try {
+    const config = { directory, maxBytes: 350, backups: 2 };
+    const log = diagnostics.createDiagnostics(config);
+    for (let n = 0; n < 30; n++) log.write({ stage: 'pool.put', status: 503, outcome: 'error', durationMs: 20, url: 'https://secret/?token=PRIVATE', message: 'BOOTH_KEY=PRIVATE', code: '123456', portrait: 'PRIVATE', trace: 'PRIVATE' });
+    const reopened = diagnostics.createDiagnostics(config); assert.ok(reopened.write({ stage: 'page.boot', outcome: 'ok' }));
+    const files = await readdir(directory); assert.ok(files.length <= 3);
+    const text = (await Promise.all(files.map(f => readFile(join(directory, f), 'utf8')))).join('');
+    assert.ok(!text.includes('PRIVATE')); assert.match(text, /page.boot/);
+    assert.equal(log.write({ stage: 'unknown', message: 'PRIVATE' }), false);
+    const blocked = diagnostics.createDiagnostics({ directory: join(log.file, 'impossible') });
+    assert.equal(blocked.write({ stage: 'pool.join' }), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('real pool client and QR uploader under injected first-use failures after idle', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'capturism-pool-')), twin = await createTwin({ root, port: 0, worker: true });
+  const nativeFetch = global.fetch, oldImage = global.Image, oldDocument = global.document;
+  // Node has no canvas. Only image decoding/JPEG rasterization is stubbed;
+  // actual browser canvas is exercised separately in Chrome.
+  global.Image = class { naturalWidth = 100; naturalHeight = 100; set src(_) { queueMicrotask(() => this.onload()); } };
+  global.document = { createElement: () => ({ getContext: () => ({ fillRect() {}, drawImage() {} }), toBlob: callback => callback(new Blob([new Uint8Array(16 * 1024)], { type: 'image/jpeg' })) }) };
+  const file = join(root, 'clients.mjs');
+  await build({ stdin: { contents: "export {joinPool} from './candidate/capturism-app/src/lib/linconnu.ts'; export {uploadSessionToCloud} from './candidate/capturism-app/src/lib/relayUpload.ts';", resolveDir: resolve('.') }, outfile: file, bundle: true, platform: 'node', format: 'esm', plugins: [{ name: 'adapters', setup(b) { b.onResolve({ filter: /^(\.\/boothRelay|\.\.\/store\/sessionStore)$/ }, () => ({ path: resolve('src/adapters.ts') })); } }] });
+  global.fetch = (url, init) => { const u = new URL(url, twin.baseUrl); assert.equal(u.hostname, '127.0.0.1'); return nativeFetch(u, init); };
+  try {
+    const client = await import(pathToFileURL(file));
+    for (const scenario of ['normal','idle_sign','idle_put','idle_join']) await t.test(scenario, async () => {
+      await twin.simulator.start({ scenario });
+      const [pool, token] = await Promise.all([
+        client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: 'local-test', seed: true }),
+        client.uploadSessionToCloud({ photo: new Blob([new Uint8Array(32 * 1024)], { type: 'image/jpeg' }) }),
+      ]);
+      assert.equal(pool, scenario === 'normal'); assert.ok(token);
+      const state = await twin.simulator.snapshot();
+      assert.equal(Object.keys(state.pool).length, scenario === 'normal' ? 1 : 0);
+      if (scenario !== 'normal') assert.ok(state.events.some(e => e.stage === 'idle-fault'));
+      // The same one-attempt pool client succeeds on the next session once
+      // the first-use fault has been consumed (no scenario reset).
+      assert.equal(await client.joinPool({ portraitDataUrl: 'synthetic', code: '000000', sessionId: 'next-local-test', seed: true }), true);
+    });
+    await t.test('diagnostic events persist through bridge process restart and reject oversized batches', async () => {
+      const body = [{ stage: 'pool.put', outcome: 'error', status: 503, trace: '12345678-abcd', uploadUrl: 'PRIVATE' }];
+      const res = await nativeFetch(twin.baseUrl + '/api/diagnostics', { method: 'POST', body: JSON.stringify(body) }); assert.equal(res.status, 204);
+      const oldPid = twin.simulator.worker.pid;
+      await twin.simulator.stopWorker(); await twin.simulator.startWorker();
+      assert.notEqual(twin.simulator.worker.pid, oldPid);
+      const text = await readFile(twin.simulator.diagnostics.file, 'utf8'); assert.match(text, /12345678-abcd/); assert.ok(!text.includes('PRIVATE'));
+      const oversized = await nativeFetch(twin.baseUrl + '/api/diagnostics', { method: 'POST', body: JSON.stringify(Array(51).fill(body[0])) }); assert.equal(oversized.status, 400);
+    });
+    // Flush best-effort diagnostics before disposing local server.
+    await new Promise(r => setTimeout(r, 100));
+  } finally { global.fetch = nativeFetch; global.Image = oldImage; global.document = oldDocument; await twin.close(); await rm(root, { recursive: true, force: true }); }
+});

@@ -2,6 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile, readdir, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fork } from 'node:child_process';
+import diagnosticsModule from './candidate/diagnostics.cjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 export const presets = {
@@ -11,6 +12,9 @@ export const presets = {
   cold: { label: 'Relay waking up · 55 seconds', kbps: 125, latency: 150, offline: 0, cold: 55, commitFailures: 0, contention: 0 },
   offline: { label: 'Connection lost for 20 seconds', kbps: 125, latency: 150, offline: 20, cold: 0, commitFailures: 0, contention: 0 },
   confirm: { label: 'Photo lands, confirmation fails five times', kbps: 1024, latency: 40, offline: 0, cold: 0, commitFailures: 5, contention: 0 },
+  idle_sign: { label: 'After idle: first signing requests fail', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
+  idle_put: { label: 'After idle: first direct PUTs fail', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
+  idle_join: { label: 'After idle: first pool confirmation fails', kbps: 125, latency: 150, offline: 0, cold: 0, commitFailures: 0, contention: 0 },
 };
 
 export async function readBody(req, limit = 32 * 1024 * 1024) {
@@ -66,6 +70,7 @@ export class Simulator {
     this.root = root; this.baseUrl = baseUrl; this.workerEnabled = worker;
     this.run = null; this.worker = null; this.events = [];
     this.uplink = null; this.generation = 0;
+    this.diagnostics = diagnosticsModule.createDiagnostics({ directory: join(root, 'diagnostic-logs') });
   }
   event(stage, detail, extra = {}) {
     const event = { at: new Date().toISOString(), elapsed: this.run ? Date.now() - this.run.started : 0, stage, detail, ...extra };
@@ -84,9 +89,10 @@ export class Simulator {
     const dir = join(this.root, id);
     await mkdir(join(dir, 'objects'), { recursive: true });
     await copyFile(new URL('./vendor/video-queue.cjs', import.meta.url), join(dir, 'video-queue.cjs'));
-    this.run = { id, dir, scenario, cfg, started: Date.now(), coldUntil: Date.now() + cfg.cold * 1000, sessions: {}, objects: {}, signed: new Map(), commitFailures: cfg.commitFailures };
+    this.run = { id, dir, scenario, cfg, started: Date.now(), coldUntil: Date.now() + cfg.cold * 1000, sessions: {}, pool: {}, faults: new Set(), objects: {}, signed: new Map(), commitFailures: cfg.commitFailures };
     this.uplink = new Uplink(Math.max(1, cfg.kbps - cfg.contention) * 1024);
     this.event('run', cfg.label);
+    if (scenario.startsWith('idle_')) this.event('idle-model', 'Injected first-use fault after modeled 2-hour idle; no Windows/Chrome idle is emulated');
     await this.startWorker();
     return { id, cfg };
   }
@@ -117,7 +123,17 @@ export class Simulator {
       const names = await readdir(dir).catch(() => []);
       queue = (await Promise.all(names.filter(n => n.endsWith('.json') && !n.endsWith('__done.json')).map(n => readFile(join(dir, n), 'utf8').then(JSON.parse).catch(() => null)))).filter(Boolean);
     }
-    return { run: this.run && { id: this.run.id, scenario: this.run.scenario, cfg: this.run.cfg }, events: this.events, queue, sessions: this.run?.sessions || {}, activeUploads: this.uplink?.jobs.size || 0, workerRunning: !!this.worker };
+    return { run: this.run && { id: this.run.id, scenario: this.run.scenario, cfg: this.run.cfg }, events: this.events, queue, sessions: this.run?.sessions || {}, pool: this.run?.pool || {}, activeUploads: this.uplink?.jobs.size || 0, workerRunning: !!this.worker };
+  }
+  fault(point, res) {
+    const run = this.run;
+    if (!run || run.faults.has(point)) return false;
+    const active = (run.scenario === 'idle_sign' && point.endsWith('.sign')) ||
+      (run.scenario === 'idle_put' && point.endsWith('.put')) ||
+      (run.scenario === 'idle_join' && point === 'pool.join');
+    if (!active) return false;
+    run.faults.add(point); this.event('idle-fault', `${point}: injected first-use HTTP 503`);
+    json(res, 503, { error: 'Injected first request failure after idle' }); return true;
   }
   async cloudReady(res) {
     const run = this.run;
@@ -130,6 +146,7 @@ export class Simulator {
   }
   async handle(req, res, url) {
     const p = url.pathname;
+    if (p === '/api/diagnostics' && req.method === 'POST') return diagnosticsModule.receiveDiagnostics(req, res, this.diagnostics);
     if (p === '/api/relay/configured') return json(res, 200, { configured: true });
     if (p === '/lab/state') return json(res, 200, await this.snapshot());
     if (p === '/lab/start' && req.method === 'POST') return json(res, 200, await this.start(JSON.parse(await readBody(req, 4096))));
@@ -142,6 +159,22 @@ export class Simulator {
     if (p === '/lab/report') return json(res, 200, await this.snapshot());
     if (!this.run) return json(res, 503, { error: 'Start a local scenario first' });
     const run = this.run, generation = this.generation;
+    if (p === '/api/relay/pool/sign-upload' && req.method === 'POST') {
+      if (!(await this.cloudReady(res)) || this.fault('pool.sign', res)) return;
+      await readBody(req, 4096);
+      const entryId = randomBytes(8).toString('hex'), key = `pool-portraits/${entryId}.jpg`, sig = randomBytes(12).toString('hex');
+      run.signed.set(sig, { key, contentType: 'image/jpeg', expires: Date.now() + 600000 });
+      this.event('pool-sign', 'Pool portrait upload URL issued');
+      return json(res, 200, { entryId, key, uploadUrl: `${this.baseUrl}/storage/${sig}` });
+    }
+    if (p === '/api/relay/pool/join' && req.method === 'POST') {
+      if (!(await this.cloudReady(res)) || this.fault('pool.join', res)) return;
+      const body = JSON.parse(await readBody(req, 4096));
+      if (!run.objects[body.portraitKey]) return json(res, 400, { error: 'Pool portrait not stored' });
+      // Synthetic pool only: no identity, consent, matching or real quiz validation.
+      run.pool[body.entryId] = { portraitKey: body.portraitKey };
+      this.event('pool-joined', 'Synthetic pool portrait registered'); return json(res, 200, { ok: true });
+    }
     if (p === '/api/video-queue' && req.method === 'POST') {
       if (!this.workerPort) return json(res, 503, { error: 'Local bridge stopped' });
       const body = await readBody(req);
@@ -150,6 +183,7 @@ export class Simulator {
     }
     if (p === '/api/relay/sign-upload' || p === '/api/booth/sign-upload') {
       if (!(await this.cloudReady(res))) return;
+      if (this.fault('photo.sign', res)) return;
       const wait = Math.max(0, run.coldUntil - Date.now());
       if (wait) { this.event('relay', `Simulated cold start: waiting ${Math.ceil(wait / 1000)}s`); await sleep(wait); }
       if (generation !== this.generation) return json(res, 409, { error: 'Scenario ended' });
@@ -167,6 +201,7 @@ export class Simulator {
       if (!(await this.cloudReady(res))) return;
       const signed = run.signed.get(p.split('/')[2]);
       if (!signed || signed.expires < Date.now()) return json(res, 403, { error: 'Expired local upload URL' });
+      if (this.fault(signed.key.startsWith('pool-portraits/') ? 'pool.put' : 'photo.put', res)) return;
       const controller = new AbortController();
       res.on('close', () => { if (!res.writableEnded) controller.abort(); });
       const started = Date.now(); const chunks = []; let bytes = 0;

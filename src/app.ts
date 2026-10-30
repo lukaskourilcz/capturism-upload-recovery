@@ -18,8 +18,10 @@ async function api(path: string, body?: unknown) {
 const log = (message: string) => api('/lab/client-event', { message }).catch(() => {});
 for (const method of ['log', 'warn'] as const) {
   const original = console[method].bind(console);
-  console[method] = (...args) => { original(...args); if (String(args[0]).startsWith('[UPLOAD]')) void log(args.map(String).join(' ')); };
+  console[method] = (...args) => { original(...args); if (String(args[0]).startsWith('[UPLOAD]') || String(args[0]).startsWith('[linconnu]')) void log(args.map(String).join(' ')); };
 }
+const baselinePool = await import('../vendor/linconnu');
+const candidatePool = await import('../candidate/capturism-app/src/lib/linconnu');
 const baseline = await import('../vendor/relayUpload');
 const candidate = await import('../candidate/capturism-app/src/lib/relayUpload');
 import { qrInactivityDelay } from '../candidate/capturism-app/src/lib/qrWaitPolicy';
@@ -90,6 +92,15 @@ input('start').onclick = async () => {
     await log(`Version: ${fixedRun ? 'local fix' : 'baseline'}; scan window ${scanWindowMs}ms; pending timeout ${waitMs}ms`);
     const epoch = getSessionEpoch();
     const asset = await photo();
+    if (input('pool').checked) {
+      $('pool-status').textContent = 'Pool portrait: uploading…';
+      // Same fire-and-forget parallel path as LostConnectionPrinting.
+      void (fixedRun ? candidatePool : baselinePool).joinPool({ portraitDataUrl: testCanvas().toDataURL('image/png'), code: '000000', sessionId: 'synthetic-local-session', seed: true }).then(ok => {
+        $('pool-status').textContent = ok ? 'Pool portrait: saved.' : 'Pool portrait: FAILED (QR upload continues separately).';
+        void log(`Synthetic pool result: ${ok ? 'saved' : 'failed'}`);
+      });
+    }
+
     const video = input('videos').checked ? await clip() : undefined;
     await delay(Math.max(0, Math.min(600, Number(input('composition').value) || 0)) * 1000);
     if (epoch !== getSessionEpoch()) throw new Error('Session ended during preparation; no upload started');
