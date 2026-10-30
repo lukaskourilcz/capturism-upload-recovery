@@ -1,3 +1,18 @@
+--- a/capturism-app/src/App.tsx
++++ b/capturism-app/src/App.tsx
+@@ -1,3 +1,4 @@
++import { startPageDiagnostics } from './lib/diagnostics'
+ import { useEffect, useRef, useState } from 'react'
+ import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+ import { AnimatePresence, motion } from 'framer-motion'
+@@ -277,6 +278,7 @@
+   // subsequent calls are no-ops.
+   useEffect(() => {
+     connectBoothRelay()
++    return startPageDiagnostics()
+   }, [])
+ 
+   // Keep-warm: ping the relay's /api/health every 10 minutes so Render's
 --- a/capturism-app/src/components/screens/ByePage.tsx
 +++ b/capturism-app/src/components/screens/ByePage.tsx
 @@ -8,6 +8,7 @@
@@ -42,6 +57,356 @@
  
    const handleRestart = () => {
      clearSessionVideo()
+--- a/capturism-app/src/components/screens/Printing.tsx
++++ b/capturism-app/src/components/screens/Printing.tsx
+@@ -1,3 +1,4 @@
++import { measureStage } from '../../lib/diagnostics'
+ import { useState, useEffect, useRef } from 'react'
+ import { useNavigate } from 'react-router-dom'
+ import { motion, AnimatePresence } from 'framer-motion'
+@@ -543,7 +544,7 @@
+       }
+       try {
+         console.log('[CALENDAR-PRINT] rasterizing card via toPng...')
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+         // ⚠️ html-to-image applies `backgroundColor` as an inline
+@@ -561,13 +562,13 @@
+         // exactly; the long side lands at 5400 px / 9 in = 600 dpi too.
+         // Going higher would be wasted — the printer can't resolve past
+         // ~600 dpi.
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 7.2,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+           backgroundColor: resolvePaperBg(selectedColor),
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+         // Calendar prints at the kiosk's configured paper size. In 6×9
+         // mode the bridge / driver picks 6×9 paper (operator has loaded
+         // the 6×9 ribbon for the day); in 4×6 mode the Calendar fits
+@@ -613,7 +614,7 @@
+         // override position/transform on the clone root so the PNG comes
+         // out flush against (0, 0).
+         const el = cardRef.current
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+         // Same html-to-image quirk as the physical-print path above:
+@@ -621,7 +622,7 @@
+         // root, overriding the card's own bg. Pass the resolved paper
+         // colour so the override matches and the cloud render keeps
+         // the chosen studio colour.
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 4,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+@@ -633,16 +634,16 @@
+             margin: '0',
+             transform: 'none',
+           },
+-        })
++        }))
+         const video = getSessionVideoBlob()
+         const selectedTimestamps = selectedPhotos.map((i) => photoTimestampsMs[i] ?? 0)
+-        const composed = await composeShareVideos({
++        const composed = await measureStage('render.video', () => composeShareVideos({
+           sessionVideo: video,
+           selectedTimestamps,
+           shootType,
+           frameType,
+           printImageDataUrl: dataUrl,
+-        })
++        }))
+         // JPEG transcode for the upload copy only — the video-bake above
+         // keeps the original PNG bytes. ~10× smaller PUT = the QR commits
+         // in seconds instead of straddling the 120s timeout.
+@@ -915,7 +916,7 @@
+       if (!cardRef.current) return
+       try {
+         const el = cardRef.current
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+         // html-to-image applies `backgroundColor` as inline
+@@ -923,7 +924,7 @@
+         // VALID CSS colour. Split-cream keys (e.g. '#C08B89-cream') are
+         // not — pass the resolved paper colour through so we always
+         // hand it a real hex / rgb value.
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 4,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+@@ -932,16 +933,16 @@
+           // flush against (0,0) instead of inheriting the card's frame
+           // offset (253, 207) — same fix as postcard / calendar.
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+         const video = getSessionVideoBlob()
+         const selectedTimestamps = selectedPhotos.map((i) => photoTimestampsMs[i] ?? 0)
+-        const composed = await composeShareVideos({
++        const composed = await measureStage('render.video', () => composeShareVideos({
+           sessionVideo: video,
+           selectedTimestamps,
+           shootType,
+           frameType,
+           printImageDataUrl: dataUrl,
+-        })
++        }))
+         // JPEG transcode for the upload copy only — the video-bake above
+         // keeps the original PNG bytes. ~10× smaller PUT = the QR commits
+         // in seconds instead of straddling the 120s timeout.
+@@ -988,7 +989,7 @@
+       }
+       try {
+         console.log('[PHOTO-PRINT] rasterizing card via toPng...')
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+         // Resolve split-cream / etc. so html-to-image gets a VALID CSS
+@@ -1006,13 +1007,13 @@
+         // 7.2 — a bigger sheet at the old pixelRatio prints soft.)
+         const isLargePhoto = photoPrintSize === 'large'
+         const photoSizeMode = printSizeFor('photo', photoPrintSize)
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: isLargePhoto ? 7.5 : 5,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+           backgroundColor: resolvePaperBg(selectedColor),
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+         console.log(`[PHOTO-PRINT] toPng done (${(dataUrl.length / 1024).toFixed(1)}KB, ${isLargePhoto ? 'LARGE 15x23' : 'normal 10x15'}), POSTing /api/printer/print at ${photoSizeMode}...`)
+ 
+         // Mini sheet SWAPS one of the paid prints — it is not an extra one.
+@@ -1292,7 +1293,7 @@
+       }
+       try {
+         console.log('[POSTCARD-PRINT] rasterizing card via toPng...')
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+         // Postcard's outer card is white (right half) and the photo
+@@ -1302,13 +1303,13 @@
+         // pixelRatio 5 → ~625 dpi on a 750-CSS-px-wide sheet, saturating the
+         // DS620's 600 dpi ceiling. Higher would be wasted; the printer can't
+         // resolve past ~600 dpi.
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 5,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+           backgroundColor: '#FDFDFD',
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+         // Postcard is the only landscape variant. The DNP DS620 driver
+         // defaults to portrait 4×6 (1200×1800) and won't auto-rotate
+         // landscape input — it squishes the 3:2 image into the 2:3
+@@ -1568,10 +1569,10 @@
+         //    renders at (0,0) — see PostcardPrinting for the same fix.
+         if (!dataUrl && cardRef.current) {
+           const el = cardRef.current
+-          await waitForSegmentation(selectedPhotos)
++          await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+           await promoteSelectedToFullRes(selectedPhotos)
+           await waitForImages(el)
+-          dataUrl = await toPng(el, {
++          dataUrl = await measureStage('render.raster', () => toPng(el, {
+             pixelRatio: 4,
+             width: el.offsetWidth,
+             height: el.offsetHeight,
+@@ -1583,7 +1584,7 @@
+               transform: 'none',
+             },
+             backgroundColor: '#FAFAF8',
+-          })
++          }))
+           console.log('[PRINT] Using DOM-rasterized card for gallery (no server template)')
+         }
+ 
+@@ -1600,13 +1601,13 @@
+         const sessionVideo = getSessionVideoBlob()
+         const selectedTimestamps = selectedPhotos.map((i) => photoTimestampsMs[i] ?? 0)
+         const cloudUpload = cloudUploadConfigured
+-          ? composeShareVideos({
++          ? measureStage('render.video', () => composeShareVideos({
+               sessionVideo,
+               selectedTimestamps,
+               shootType,
+               frameType,
+               printImageDataUrl: dataUrl,
+-            }).then(async (composed) => {
++            })).then(async (composed) => {
+               // JPEG transcode for the upload copy only — the physical
+               // print below and the video-bake above keep the original
+               // PNG bytes. ~10× smaller PUT = the QR commits in seconds
+@@ -2001,16 +2002,16 @@
+       if (!cardRef.current) return
+       try {
+         const el = cardRef.current
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 4,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+           backgroundColor: resolvePaperBg(selectedColor),
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+ 
+         // Pool join — the portrait stored for future strangers is exactly
+         // the card this visitor printed. Identity + consents are joined
+@@ -2038,13 +2039,13 @@
+         if (cloudUploadConfigured) {
+           const video = getSessionVideoBlob()
+           const selectedTimestamps = selectedPhotos.map((i) => photoTimestampsMs[i] ?? 0)
+-          const composed = await composeShareVideos({
++          const composed = await measureStage('render.video', () => composeShareVideos({
+             sessionVideo: video,
+             selectedTimestamps,
+             shootType,
+             frameType,
+             printImageDataUrl: dataUrl,
+-          })
++          }))
+           const uploadPhoto = await photoBlobForUpload(dataUrl)
+           const token = await uploadSessionToCloud({
+             retryForMs: SESSION_UPLOAD_PATIENCE_MS, // background flow: ride out a network blip
+@@ -2080,16 +2081,16 @@
+         return
+       }
+       try {
+-        await waitForSegmentation(selectedPhotos)
++        await measureStage('render.segmentation', () => waitForSegmentation(selectedPhotos))
+         await promoteSelectedToFullRes(selectedPhotos)
+         await waitForImages(el)
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 5,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+           backgroundColor: resolvePaperBg(selectedColor),
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+         // Declined → this single job carries BOTH prints (2 copies of the
+         // visitor's own card); confirmed → 1 copy here, the l'INCONNU
+         // card follows as job 2.
+@@ -2125,13 +2126,13 @@
+       }
+       try {
+         await waitForImages(el)
+-        const dataUrl = await toPng(el, {
++        const dataUrl = await measureStage('render.raster', () => toPng(el, {
+           pixelRatio: 5,
+           width: el.offsetWidth,
+           height: el.offsetHeight,
+           backgroundColor: '#FDFDFD',
+           style: { position: 'static', left: '0', top: '0', margin: '0', transform: 'none' },
+-        })
++        }))
+         console.log(`[LC-PRINT] connection card rasterized (${(dataUrl.length / 1024).toFixed(1)}KB, ${matchState}), printing...`)
+         const { delivered } = await callPrint({ imageDataUrl: dataUrl, copies: 1 })
+         if (!delivered) {
+--- /dev/null
++++ b/capturism-app/src/lib/diagnostics.ts
+@@ -0,0 +1,49 @@
++type Event = { stage: string; outcome?: string; durationMs?: number; status?: number; error?: string; driftMs?: number; trace?: string; bytes?: number; clientAtMs?: number }
++let pending: Event[] = []
++let sending = false
++export function diagnostic(event: Event): void {
++  pending.push({ ...event, clientAtMs: Date.now() }); pending = pending.slice(-50)
++  void flush()
++}
++async function flush() {
++  if (sending || !pending.length) return
++  sending = true
++  const batch = pending.splice(0, 50)
++  try {
++    const response = await fetch('/api/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(batch), signal: AbortSignal.timeout(2000) })
++    if (!response.ok) pending = [...batch, ...pending].slice(-50)
++    else if (pending.length) queueMicrotask(() => { void flush() })
++  } catch { pending = [...batch, ...pending].slice(-50) }
++  finally { sending = false }
++  // A single follow-up handles events collected during the request. Failed
++  // batches wait for a future event; diagnostics never form a retry loop.
++}
++export async function diagnosticFetch(url: string, init: RequestInit, stage: string): Promise<Response> {
++  const trace = crypto.randomUUID(), start = performance.now()
++  diagnostic({ stage, trace, outcome: 'start', bytes: init.body instanceof Blob ? init.body.size : undefined })
++  const headers = new Headers(init.headers)
++  if (url.startsWith('/api/relay/')) headers.set('X-Capturism-Trace', trace)
++  try {
++    const response = await fetch(url, { ...init, headers })
++    diagnostic({ stage, trace, outcome: response.ok ? 'ok' : 'error', status: response.status, durationMs: performance.now() - start, error: response.ok ? undefined : 'http' })
++    return response
++  } catch (e) {
++    const name = (e as Error).name
++    diagnostic({ stage, trace, outcome: 'error', durationMs: performance.now() - start, error: name === 'TimeoutError' ? 'timeout' : name === 'AbortError' ? 'aborted' : 'network' })
++    throw e
++  }
++}
++export async function measureStage<T>(stage: string, operation: () => Promise<T>): Promise<T> {
++  const start = performance.now(), trace = crypto.randomUUID()
++  diagnostic({ stage, trace, outcome: 'start' })
++  try { const value = await operation(); diagnostic({ stage, trace, outcome: 'ok', durationMs: performance.now() - start }); return value }
++  catch (e) { diagnostic({ stage, trace, outcome: 'error', error: 'other', durationMs: performance.now() - start }); throw e }
++}
++export function startPageDiagnostics(): () => void {
++  diagnostic({ stage: 'page.boot', outcome: 'ok' })
++  const visibility = () => diagnostic({ stage: 'page.visibility', outcome: document.visibilityState === 'visible' ? 'visible' : 'hidden' })
++  visibility(); document.addEventListener('visibilitychange', visibility)
++  let expected = Date.now() + 60000
++  const timer = setInterval(() => { diagnostic({ stage: 'page.timer', driftMs: Math.max(0, Date.now() - expected) }); expected = Date.now() + 60000 }, 60000)
++  return () => { clearInterval(timer); document.removeEventListener('visibilitychange', visibility) }
++}
+--- a/capturism-app/src/lib/linconnu.ts
++++ b/capturism-app/src/lib/linconnu.ts
+@@ -1,3 +1,4 @@
++import { diagnosticFetch } from './diagnostics'
+ /**
+  * l'INCONNU — session mode (formerly "Lost Connection"; renamed by spec
+  * amendment 1. Internal identifiers — shootType 'lost_connection', the
+@@ -255,6 +256,7 @@
+ }
+ 
+ async function relayFetch(path: string, init?: RequestInit): Promise<Response> {
++  if (['/api/relay/pool/sign-upload', '/api/relay/pool/join'].includes(path)) return diagnosticFetch(path, { ...init, signal: AbortSignal.timeout(20_000) }, path.endsWith('sign-upload') ? 'pool.sign' : 'pool.join')
+   return fetch(path, { ...init, signal: AbortSignal.timeout(20_000) })
+ }
+ 
+@@ -382,12 +384,12 @@
+     const { entryId, key, uploadUrl } = await signRes.json()
+     if (!entryId || !key || !uploadUrl) return false
+ 
+-    const putRes = await fetch(uploadUrl, {
++    const putRes = await diagnosticFetch(uploadUrl, {
+       method: 'PUT',
+       headers: { 'Content-Type': 'image/jpeg' },
+       body: blob,
+       signal: AbortSignal.timeout(120_000),
+-    })
++    }, 'pool.put')
+     if (!putRes.ok) return false
+ 
+     const joinRes = await relayFetch('/api/relay/pool/join', {
 --- /dev/null
 +++ b/capturism-app/src/lib/qrWaitPolicy.ts
 @@ -0,0 +1,10 @@
@@ -57,7 +422,22 @@
 +}
 --- a/capturism-app/src/lib/relayUpload.ts
 +++ b/capturism-app/src/lib/relayUpload.ts
-@@ -343,17 +343,24 @@
+@@ -1,3 +1,4 @@
++import { diagnosticFetch } from './diagnostics'
+ /**
+  * Booth → Relay → R2 upload flow.
+  *
+@@ -86,7 +87,8 @@
+     const controller = new AbortController()
+     const timer = setTimeout(() => controller.abort(), timeoutMs)
+     try {
+-      const res = await fetch(url, { ...init, signal: controller.signal })
++      const stage = label.startsWith('R2 PUT') ? 'photo.put' : label === 'sign-upload' ? 'photo.sign' : label === 'photos-ready' ? 'photo.confirm' : 'video.enqueue'
++      const res = await diagnosticFetch(url, { ...init, signal: controller.signal }, stage)
+       clearTimeout(timer)
+       // 4xx is permanent — don't retry. 2xx is success. 5xx is retryable.
+       if (res.ok) {
+@@ -343,17 +345,24 @@
  }): Promise<SignUploadResponse> {
    const deadline = Date.now() + args.retryForMs
    let token: string | undefined
@@ -87,3 +467,96 @@
      } catch (err) {
        const msg = (err as Error).message
        const waitMs = Math.min(30_000, 2_000 * attempt)
+--- /dev/null
++++ b/diagnostics.cjs
+@@ -0,0 +1,46 @@
++'use strict';
++const fs = require('fs');
++const path = require('path');
++const STAGES = new Set(['photo.sign','photo.put','photo.confirm','video.enqueue','pool.sign','pool.put','pool.join','render.segmentation','render.raster','render.video','page.visibility','page.timer','page.boot','relay.http']);
++// Only explicit metadata is written. Never accept arbitrary console output,
++// URLs, request/response bodies, names, quiz codes, auth or signed query strings.
++function sanitize(input) {
++  if (!input || !STAGES.has(input.stage)) return null;
++  const out = { at: new Date().toISOString(), stage: input.stage };
++  for (const key of ['durationMs','status','bytes','driftMs','clientAtMs']) if (Number.isFinite(input[key])) out[key] = Math.max(0, Math.min(1e13, input[key]));
++  if (/^[a-f0-9-]{8,64}$/.test(input.trace || '')) out.trace = input.trace;
++  if (['start','ok','error','visible','hidden'].includes(input.outcome)) out.outcome = input.outcome;
++  if (['timeout','network','http','aborted','other'].includes(input.error)) out.error = input.error;
++  return out;
++}
++function createDiagnostics({ directory = path.join(__dirname, 'diagnostic-logs'), maxBytes = 2 * 1024 * 1024, backups = 4 } = {}) {
++  const file = path.join(directory, 'kiosk.jsonl');
++  let warned = false;
++  return { file, write(input) {
++    const event = sanitize(input); if (!event) return false;
++    try {
++      fs.mkdirSync(directory, { recursive: true });
++      const line = JSON.stringify(event) + '\n';
++      if (fs.existsSync(file) && fs.statSync(file).size + Buffer.byteLength(line) > maxBytes) {
++        for (let n = backups; n >= 1; n--) {
++          const src = n === 1 ? file : `${file}.${n - 1}`, dst = `${file}.${n}`;
++          if (fs.existsSync(dst)) fs.unlinkSync(dst);
++          if (fs.existsSync(src)) fs.renameSync(src, dst);
++        }
++      }
++      fs.appendFileSync(file, line, { mode: 0o600 }); return true;
++    } catch { if (!warned) { warned = true; console.warn('[diagnostics] local log unavailable'); } return false; }
++  } };
++}
++async function receiveDiagnostics(req, res, logger) {
++  if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) { res.writeHead(403); res.end(); return; }
++  let body = ''; let size = 0;
++  try {
++    for await (const chunk of req) { size += chunk.length; if (size > 32768) { res.writeHead(413); res.end(); return; } body += chunk; }
++    const events = JSON.parse(body);
++    if (!Array.isArray(events) || events.length > 50) { res.writeHead(400); res.end(); return; }
++    for (const event of events) logger.write(event);
++    res.writeHead(204); res.end();
++  } catch { if (!res.headersSent) res.writeHead(400); res.end(); }
++}
++module.exports = { createDiagnostics, receiveDiagnostics, sanitize };
+--- a/payment-bridge.js
++++ b/payment-bridge.js
+@@ -29,6 +29,8 @@
+ const videoQueue = require('./video-queue');
+ const { isPortListening } = require('./probe-port');
+ 
++const { createDiagnostics, receiveDiagnostics } = require('./diagnostics.cjs');
++const diagnostics = createDiagnostics();
+ const PORT = process.env.BRIDGE_PORT || 3001;
+ const MODE = process.env.PAYMENT_MODE || 'mock';
+ const TERMINAL_IP = process.env.TERMINAL_IP || '192.168.1.50';
+@@ -328,6 +330,16 @@
+ // `relayPath` is the path on the relay (e.g. '/api/booth/sign-upload').
+ // The request body is streamed through unchanged.
+ function forwardToRelay(req, res, relayPath) {
++  const started = Date.now();
++  const stage = relayPath === '/api/pool/sign-upload' ? 'pool.sign' : relayPath === '/api/pool/join' ? 'pool.join' : 'relay.http';
++  const trace = req.headers['x-capturism-trace'];
++  let recorded = false;
++  const record = (status, error) => {
++    if (recorded) return; recorded = true;
++    diagnostics.write({ stage, trace, status, durationMs: Date.now() - started, outcome: error || status >= 400 ? 'error' : 'ok', error });
++  };
++  res.once('finish', () => record(res.statusCode));
++  res.once('close', () => { if (!res.writableEnded) record(undefined, 'aborted'); });
+   if (!RELAY_CONFIGURED) {
+     return sendJSON(res, 503, { error: 'relay not configured on bridge (set RELAY_URL/BOOTH_ID/BOOTH_KEY in start-payment-bridge.bat)' });
+   }
+@@ -351,6 +363,7 @@
+     upRes.pipe(res);
+   });
+   upstream.on('error', (err) => {
++    record(502, err.message === 'upstream timeout' ? 'timeout' : 'network');
+     console.warn(`[relay-proxy] upstream error for ${relayPath}: ${err.message}`);
+     if (!res.headersSent) sendJSON(res, 502, { error: `relay unreachable: ${err.message}` });
+     else res.end();
+@@ -1360,6 +1373,7 @@
+   const url = new URL(req.url, `http://localhost:${PORT}`);
+   const path = url.pathname;
+   const method = req.method;
++  if (method === 'POST' && path === '/api/diagnostics') return receiveDiagnostics(req, res, diagnostics);
+ 
+   // CORS preflight
+   if (method === 'OPTIONS') {

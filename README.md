@@ -64,6 +64,8 @@ To call this an exact studio twin, obtain the kiosk's current Git SHA, bridge pr
 
 The lab now has an **Upload version** selector: original studio code or the local fix candidate. Candidate details, reproduction results and patch instructions are in [candidate/RESULTS.md](candidate/RESULTS.md). The original vendor files remain unchanged.
 
+It also runs the original pool-upload client in parallel with the QR photo. Three **After idle** presets inject first-use failures at signing, direct storage PUT, or pool confirmation. See [persistent diagnostics and idle tests](candidate/DIAGNOSTICS.md) for the modeled behavior, kiosk logging candidate and limitations. The candidate records safe diagnostics locally under `.runtime/diagnostic-logs/`; an eventual kiosk installation would use `diagnostic-logs/` beside its bridge.
+
 Automated coverage: original-source integrity; upstream queue guards; shared bandwidth and cancellation; real uploader to local storage/download; recovery after five failed confirmations; late-token rejection after reset; outage recovery; durable video queue delivery after process restart; local request-boundary checks.
 
 Browser verification on October 30: generated JPEG renders, QR appears after confirmation, both real synthetic WebM files reach the local viewer. The first healthy browser run showed QR at 2.8 seconds. This is a local test measurement, not a studio benchmark. The 55-second cold-start preset and physical hardware are not covered by the automated checks.
