@@ -1,18 +1,18 @@
-# Rollout and rollback plan — HOLD; no deployment authorization
+# Rollout and rollback plan — local blockers resolved; release still gated
 
-**Do not release the current patch. R3 (QR metadata acknowledged despite failed persistence) is reproduced locally and remains open.** Pool-v2 withdrawal/immutability and the client QR deadline/recovery checks pass, but they do not close R3. Fix it, regenerate the artifact and repeat final validation before considering release. This document is a future procedure; no kiosk/cloud changes or client messages were performed.
+**The local R3 fix passes saving/replay/restart tests; production remains on hold for the unverified kiosk/cloud/cutover gates below.** Pool-v2 and the client deadline/recovery checks remain green. This is a future procedure, not deployment authorization; no kiosk/cloud changes or client messages were performed.
 
 ## Artifact and evidence to record
 
 | Item | Current evidence / required release value |
 | --- | --- |
 | Captured monorepo baseline | `1f2df6401997455b456eab9b32d258b997dc4b9d` |
-| Reviewed local combined snapshot / implementation | `1dfbabe` / `fcac656`; these are twin SHAs, not deployed monorepo SHAs |
-| Current patch SHA-256 | `2da6962e938fba253ffeec5cf565e10fcb2b573119281fe824e797762de26d34` — **blocked by R3** |
-| Exact artifact check | Patch applied in an isolated directory; all 21 changed files match candidate bytes |
-| Local verification | 95 twin tests, 27 targeted kiosk tests; TypeScript, full lint, kiosk/twin builds and syntax checks pass |
+| Reviewed local combined snapshot / implementation | `1d7ebac` / `1d7ebac`; these are twin SHAs, not deployed monorepo SHAs |
+| Current patch SHA-256 | `dccf9d1f5bffd5e76ad499c7534bafabc81da70d17929ccf311d374d4e667f51` — local candidate; environment gates pending |
+| Exact artifact check | Patch applied in an isolated directory; all 22 changed files match candidate bytes |
+| Local verification | 112 twin tests, 27 targeted kiosk tests; TypeScript, full lint, kiosk/twin builds and syntax checks pass |
 | Actual kiosk / relay SHA and topology | Unknown; obtain from running processes/deployment metadata |
-| Future release / compatible rollback SHA | Must be recorded after R3 fix, monorepo review and final checks |
+| Future release / compatible rollback SHA | Must be recorded after monorepo review, real-environment gates and final checks |
 | Gate evidence | Responsible operator, timestamp, environment, artifact SHA, expected/actual result; keep private evidence in its approved location |
 
 Local evidence and scope: [final review](FINAL-REVIEW.md), [audit](AUDIT.md), [coverage](AUDIT-COVERAGE.md), [pool protocol](PUBLICATION-FENCING.md), [QR deadline](QR-DEADLINE.md). Do not upload photos, secrets or diagnostic payloads into Git or this plan.
@@ -21,10 +21,10 @@ Local evidence and scope: [final review](FINAL-REVIEW.md), [audit](AUDIT.md), [c
 
 | Check | Required evidence before approval |
 | --- | --- |
-| A1: QR persistence blocker | Actual relay path returns a retryable failure on metadata-save error, retains the same client checkpoint, and only acknowledges durable success. Reproduce failed save, ambiguous acknowledgement, replay and relay restart with the stored photo/download intact. Preserve existing video metadata and retention behavior. Current code fails this gate. |
-| A2: Exact final artifact | Record monorepo release SHA, patch hash, dependency lockfiles and coherent helper set; apply/build/test that exact artifact. Repeat all local regression tests after the R3 fix. A twin commit alone is not a release artifact. |
+| A1: QR persistence blocker | Actual relay path returns a retryable failure on metadata-save error, retains the same client checkpoint, and only acknowledges durable success. Reproduce failed save, ambiguous acknowledgement, replay and relay restart with the stored photo/download intact. Preserve existing video metadata and retention behavior. Local actual-handler/client/process tests pass; repeat against the real SDK/provider in isolated staging. This is still an unverified cloud gate, not another unimplemented local code fix. |
+| A2: Exact final artifact | Record monorepo release SHA, patch hash, dependency lockfiles and coherent helper set; apply/build/test that exact artifact. Repeat all local regression tests on the exact final release artifact. A twin commit alone is not a release artifact. |
 | A3: Dependencies | Triage reachable critical/high findings from the captured kiosk/relay audits and record supported upgrades or an explicit risk decision. Captured counts are not a fresh registry scan or an exploitability assessment. |
-| A4: Pool provider semantics | Use an isolated R2 bucket/service and synthetic data: conditional image creation, ETag publication, competing relays, withdrawal during body/image/metadata writes, partial cleanup and restart reconciliation. Preserve original portrait bytes and distribution/consent history. |
+| A4: Pool provider semantics | Use an isolated R2 bucket/service and synthetic data: conditional QR metadata and image creation, ETag updates/publication, competing relays, withdrawal during body/image/metadata writes, partial cleanup and restart reconciliation. Preserve original portrait bytes and distribution/consent history. |
 | A5: QR recovery | In isolated Chrome/bridge/relay: slow link, first request after idle, stalled bodies, lost response and deadline expiry; Retry download uses the original token/completed PUT and never reprints or charges. Touch cannot extend the pending deadline; reset clears recovery before another session. Test all supported languages and screen scaling. |
 | A6: Upgrade/rollback matrix | Old pool clients get 426/no PUT URL; new queue on an old relay blocks with bytes retained; old pending/uploaded files migrate with original identity; stale withdrawn backups cannot recreate data; generic 410 retains bytes. Rehearse the compatible rollback below, including scheduled-update behavior. |
 
@@ -57,11 +57,11 @@ We currently have source/hosting access, not the kiosk. These checks remain unve
 
 ## Maintenance and controlled release — only after explicit authorization
 
-1. Resolve A1–A6 and prepare the approved compatible rollback artifact. Record all K/C gate results and responsible operators. Obtain release authorization for the exact monorepo SHA/environment. Do not push incidental audit commits: an auto-deployed push can itself release code.
+1. Complete A1–A6 and prepare the approved compatible rollback artifact. Record all K/C gate results and responsible operators. Obtain release authorization for the exact monorepo SHA/environment. Do not push incidental audit commits: an auto-deployed push can itself release code.
 2. Close the booth/disable new l'INCONNU collection (`VITE_LINCONNU_DISABLED=1`, after checking how the actual Vite process reads it). Record the original setting. Let customer/payment/print/scan flows settle. Freeze updater/restart tasks, launcher branch switching and auto-deploy; stop old writer processes/wrappers so they cannot return unnoticed.
 3. With writers stopped, back up source/config/launcher references, private queue/video/diagnostic folders, receipts and device/media counters. Snapshot current storage including withdrawal fences. Reconcile each accepted job and any legacy random-id upload; do not invent a new session/consent to make a mismatch disappear. Keep secrets only in approved private storage.
 4. Retire outstanding legacy published-key write capabilities and reconcile accepted in-flight writes using the rehearsed provider procedure. Rotation can affect QR/video and every other credential consumer. Privately update required environments and confirm the intended capability is active; never restore revoked credentials as a rollback shortcut.
-5. Install the approved relay **first**, including the R3 fix and pool `server.js`, `pool.js`, `pool-publication.cjs`, `pool-retry.cjs`. Check exact deployed SHA, bounded health and logs/config. Readiness requires completed storage reconciliation, not only a healthy process. Do not invoke customer routes to demonstrate it.
+5. Install the approved relay **first**, including `server.js`, `session-metadata.cjs`, `pool.js`, `pool-publication.cjs`, `pool-retry.cjs`. Check exact deployed SHA, bounded health and logs/config. Readiness requires completed storage reconciliation, not only a healthy process. Do not invoke customer routes to demonstrate it.
 6. Update the quiescent kiosk to its reviewed coherent artifact, retaining queues/receipts in place. Use the approved pinned/main-aligned launcher path from K2; verify the actual SHA again **after** launch and after any planned automatic restart. Hard-refresh Chrome. Check local readiness and protected endpoint configuration. A browser pool ACK means saved locally until a remote receipt exists.
 7. Reconcile/drain accepted jobs under the compatible worker without changing identity. Blocked/corrupt/conflicting/withdrawn or incomplete withdrawal cleanup requires review; no automatic consent renewal, receipt clearing or blind unblock. Account for every accepted portrait and preserve published pixels/history.
 8. Enable new collection only after all gates pass and job effects are accounted for. Restore approved automation only when its branch/commit/config cannot undo the rollout. Observe ordinary sessions and the first real after-idle session; retain timestamps and safe logs. No automated production fault injection, payments, prints or client messages.
@@ -87,4 +87,4 @@ Full legacy relay rollback is **not approved** after v2 state exists: it ignores
 
 ## Current rehearsal status
 
-Local artifact equivalence, 95 twin tests, 27 targeted kiosk tests, TypeScript/lint/build and additional receipt/fairness/auth-router checks pass. R3's separate unsafe reproduction still fails the required durability invariant in both baseline and candidate. Actual Windows/device/idle, real provider semantics/revocation, hosting limits, tunnel protection, dependency disposition and controlled launch/rollback remain unverified. Everything performed for this review stayed local.
+Local artifact equivalence, 112 twin tests, 27 targeted kiosk tests, TypeScript/lint/build and additional receipt/fairness/auth-router checks pass. The before/after R3 reproduction now verifies baseline false success versus candidate retryable failure, then durable success and a recovered download after restart. A real relay handler process also passes SIGKILL/restart and photo-byte retrieval using an isolated disk-backed provider. Actual Windows/device/idle, real provider semantics/revocation, hosting limits, tunnel protection, dependency disposition and controlled launch/rollback remain unverified. Everything performed for this review stayed local.

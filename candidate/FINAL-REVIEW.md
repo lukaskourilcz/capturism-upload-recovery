@@ -1,41 +1,38 @@
-# Final combined patch review — HOLD
+# Final combined patch review — local blockers resolved; rollout gated
 
-Reviewed combined snapshot `1dfbabe`, production implementation `fcac656`, and final review/evidence commit `d1ceefc`, against Capturism baseline `1f2df6401997455b456eab9b32d258b997dc4b9d`. The production patch is unchanged by this review. SHA-256: `2da6962e938fba253ffeec5cf565e10fcb2b573119281fe824e797762de26d34`.
+Current implementation `1d7ebac0ea112b473e97f5cf7b91e599e32f6593`, against Capturism baseline `1f2df6401997455b456eab9b32d258b997dc4b9d`. Combined patch SHA-256: `dccf9d1f5bffd5e76ad499c7534bafabc81da70d17929ccf311d374d4e667f51`.
 
-**One open release blocker: R3, QR metadata durability.** The pool-v2 withdrawal/immutable-publication and client deadline/recovery fixes pass their local checks. No newly introduced product regression was demonstrated in the reviewed changes, but that does not make the complete QR path releasable. R3 is unchanged baseline behavior within that path.
+**The demonstrated pool, client-deadline and QR metadata findings are fixed locally. Production release remains gated.** No deployment, push, provider/device action or client message was performed.
 
-## R3 — High: confirmation acknowledges a failed metadata write
+## R3 resolution after the prior review
 
-The photo is stored successfully, then saving `sessions/<token>/meta.json` fails. In `capturism-relay/server.js`, `storeSession` catches the error at lines 1756–1757 and returns normally. `handlePhotosReady` sends HTTP 200/`ok: true`. The uploader shows its QR and clears recovery. After a relay restart, `loadSession` has no durable metadata and the actual download handler returns 404, while the photo still exists.
+Review `190e32e` found that the baseline relay returned 200/ok after a failed metadata save, leaving a QR that returned 404 after restart. The new shared metadata writer acknowledges only a successful conditional write or a fresh durable read proving an identical prior commit. Save/read errors return 503 instead of publishing an in-memory-only session. HTTP/WebSocket notifications and dev-seed success follow the same boundary. Video discovery also persists before updating the cache.
 
-`audit/reproduce-qr-persistence.mjs` executes the actual confirmation/storage/load/download functions from **both baseline and candidate**, with isolated storage/auth/broadcast replacements. Both reproduce:
+Replay preserves photo/booth identity, existing video fields, historical fields and original timestamps/expiry. Conditional updates prevent competing relays from dropping separate video updates. Stored expired sessions return 410 and cannot renew their clocks; the client stops automatic retries for that response. Recovery retains the same prepared photo/token and skips an already-completed PUT.
 
-| Save result | Booth acknowledgement | Before restart | After restart | Stored photo |
+The before/after regression uses actual relay handler/storage/load/download source with local provider replacements:
+
+| Injected metadata save failure | Initial response | New success cache / notice | Restart before recovery | After saved retry and restart |
 | --- | --- | --- | --- | --- |
-| Metadata write fails | 200, ok=true | Session in memory | Download 404 | Still present |
+| Baseline | 200/ok | Present despite failed save | Download 404 despite prior success | Download 200 |
+| Candidate | 503 | Absent | Download unavailable; no prior success was claimed | Download 200 |
 
-Evidence: `test-results/final-review-qr-persistence.json`. The script's successful exit proves the unsafe behavior; it is intentionally separate from the passing safety suite. There were no network/provider calls or messages.
+Evidence: `test-results/qr-metadata-before-after.json`; contract: [QR metadata](QR-METADATA.md). The regression script now asserts safe candidate behavior instead of expecting both versions to fail the invariant.
 
-Before release, require durable QR metadata before acknowledging confirmation, return a retryable failure otherwise, and test save failure/ambiguous acknowledgement/replay/restart against the actual relay path. Preserve original photo/token, completed PUT, video fields and retention/privacy behavior. The current client deadline does not detect a falsely successful relay response. The [audit](AUDIT.md) records R3 as open; this review does not implement an unrequested relay persistence change.
+## Final verification
 
-## Regression review and evidence
+- **112 twin tests pass**, zero failures/skips, about 35.7 seconds; **27 targeted kiosk tests pass** across five uploader/probe/privacy/video/UI files. All prior pool withdrawal, immutable bytes, queue persistence, deadline, local ingress and rollback checks remain green.
+- Actual handler tests cover failed/ambiguous save, replay/history/retention, conflicting identity, concurrent media updates, failed discovery patch, corrupt/missing/unavailable storage, malformed input and HTTP/WS/dev-seed boundaries.
+- A real client over local HTTP sees 503 then 200 and sends one photo PUT, including deadline-then-manual recovery. A real handler child process is killed after acknowledgement; a new process reloads disk-backed provider fixtures and serves the original photo via the recovered download. Actual R2/Windows behavior remains unverified.
+- Kiosk TypeScript, full lint with zero warnings, production and twin builds, and candidate JavaScript syntax pass. Existing large-chunk/mixed-import and Node deprecation warnings remain. Node 26 kiosk tests use `NODE_OPTIONS=--no-experimental-webstorage` for jsdom-owned localStorage.
+- The exact patch applies to a fresh copy of baseline files and reproduces all **22 changed files byte-for-byte**. No production dependencies or lockfiles changed.
 
-- **95 twin tests pass**, zero failures/skips, about 35.7 seconds. Prior QR, video, pool, ingress, withdrawal, immutable bytes, replay and restart cases remain green. Added checks exercise another due queue item despite a failed/corrupt item, receipt-write failure after remote ACK followed by recovery with one identity, and the actual HTTP router/booth-auth boundary before v2 handler entry.
-- **27 targeted kiosk tests pass** across five uploader/probe/privacy/video/UI files. Actual thank-you component tests cover timeout despite touches, explicit recovery, same-session token display, five-minute privacy reset and translated help. These are not a full device/payment test suite.
-- A clock-sensitive test assumed synchronous setup took zero milliseconds. It now brackets root creation with before/after timestamps, still asserts the exact two-minute default, and always cancels the pending operation in cleanup. Initial output is retained in `test-results/final-review-initial-tests.txt`; the final full suite passes without suppressed assertions.
-- Kiosk TypeScript, full lint with zero warnings, production build and twin build pass. Existing large-chunk/mixed-import and Node deprecation warnings remain. Node 26 kiosk tests use `NODE_OPTIONS=--no-experimental-webstorage` for jsdom-owned localStorage.
-- The exact combined patch was applied to copied baseline files in a fresh temporary directory outside Git. All **21 changed files** match candidate bytes. Evidence: `test-results/final-review-artifact.json`. No dependencies or production source changed in this review.
-- Source/callers reviewed across browser upload/preparation/reset, pool enqueue/worker/receipt persistence, relay publication/withdrawal/matching/read paths, ingress/diagnostics, route authentication and deployment/launcher/backup behavior. Provider replacements model commit-time conditions; this is not a live R2 verification. Full relay startup/integrations and actual devices remain unexecuted.
+Current evidence: `test-results/qr-durability-full-tests.txt`, `qr-durability-kiosk-tests.txt`, `qr-durability-typecheck.txt`, `qr-durability-lint.txt`, `qr-durability-build.txt`, `qr-durability-artifact.json`. Previous Chrome evidence remains historical. Full production relay startup/integrations and physical devices were not executed.
 
-Current evidence: `test-results/final-review-full-tests.txt`, `final-review-targeted.txt`, `final-review-kiosk-tests.txt`, `final-review-typecheck.txt`, `final-review-lint.txt`, `final-review-build.txt`. Earlier Chrome evidence remains historical; no new browser interaction or cloud request was needed for this review.
+## Remaining release boundary
 
-## Rollout and rollback changes
+The [rollout/rollback plan](ROLLOUT-ROLLBACK.md) retains explicit code/staging, kiosk and cloud gates. Verify the real SDK/conditional writes, permissions, hosting timeouts, QR save/restart recovery, private backups and legacy capability retirement in isolation before release. Include `session-metadata.cjs` with the relay artifact and preserve it in any compatible rollback.
 
-The [revised plan](ROLLOUT-ROLLBACK.md) now has explicit code/staging, kiosk and cloud gates, required evidence and a rollback decision matrix. Key additions:
+Kiosk startup/updater scripts can switch a detached checkout back to `main` and pull. Freeze automatic source mutation and prove the actual running SHA after launch/restart. Preserve current distributions, withdrawal fences, queue bytes and done/withdrawn receipts. A legacy writable relay remains an unsafe downgrade after v2 state.
 
-- Fix R3 before release; separately verify real QR persistence/restart, provider ETags/conditional writes, slow-body hosting limits, key retirement and backup completeness.
-- Treat kiosk startup/updater scripts as part of the release boundary. They can switch a detached or side branch back to `main`, stash tracked edits and pull newer code. Freeze automatic source mutation and prove the running artifact survives the intended restart; an arbitrary checkout followed by the stock launcher is not a rollback pin.
-- Preserve v2 fences, current distributions, queue bytes and done/withdrawn receipts. A full legacy relay downgrade stays prohibited after v2 state, even with an empty queue. A rotated legacy write capability must stay retired.
-- Restrict future production readiness checks to verified read-only signals. Download/admin-pool GETs can reconcile/persist data; rating/report paths have effects. Do not use them as smoke tests. Use isolated staging for fault injection and suppress real notification/report delivery there.
-
-Actual kiosk access, Windows recovery/ACLs/launcher topology, real idle conditions, tunnel/header behavior, R2 permissions/lifecycle/revocation, Render topology/request limits and baseline dependency advisory disposition remain unverified. These are evidence gates, not completed checks. No deployment, push, device operation, credential mutation, payment/print action or client message was performed.
+Actual Windows/Chrome/filesystem/ACLs, device and real idle behavior, tunnel headers, provider revocation/lifecycle/IAM, Render topology/limits and baseline dependency advisory disposition remain unverified. Production checks must use verified read-only health/config/log signals; GET download/admin-pool paths can have persistence effects. No current local result authorizes a deployment or client message.

@@ -1,10 +1,10 @@
 # One QR upload deadline and explicit recovery — local candidate
 
-Tested implementation `fcac656`, based on Capturism `1f2df64`. No push, deployment, live credentials, studio operations or client messages.
+Deadline implementation originated in `fcac656`; current combined implementation is `1d7ebac`, based on Capturism `1f2df64`. No push, deployment, live credentials, studio operations or client messages.
 
 ## Contract
 
-`uploadSessionToCloud` starts one absolute photo-network deadline. Signing, reading its response JSON, R2 PUT, confirmation and its response body, inner retries, outer retries and every backoff all consume that same budget. Per-request limits can shorten a request but cannot renew the root deadline. The timer aborts the current transport; a separate promise race ensures even a stalled/non-cooperative operation cannot keep the caller waiting. Before exposing a token, the code checks the deadline and session again.
+`uploadSessionToCloud` starts one absolute photo-network deadline. The relay now also requires [durable metadata confirmation](QR-METADATA.md); save failures retain the same client checkpoint until a later successful acknowledgement. Signing, reading its response JSON, R2 PUT, confirmation and its response body, inner retries, outer retries and every backoff all consume that same budget. Per-request limits can shorten a request but cannot renew the root deadline. The timer aborts the current transport; a separate promise race ensures even a stalled/non-cooperative operation cannot keep the caller waiting. Before exposing a token, the code checks the deadline and session again.
 
 | Caller / state | Bound and behavior |
 | --- | --- |
@@ -32,7 +32,7 @@ Safe diagnostics add `photo.flow` start/ok/error with elapsed duration and fixed
 
 ## Validation
 
-- `npm test` in the twin: **92 pass**, zero failures/skips. Includes 13 deadline/recovery checks and 8 local-network checks, plus prior QR/pool/video/storage/privacy regressions.
+- `npm test` in the twin: **112 pass**, zero failures/skips. Includes 14 deadline/recovery checks and 8 local-network checks, plus prior QR/pool/video/storage/privacy regressions.
 - Deadline tests stall each network stage and signing/confirmation body reads, including a deliberately abort-ignoring promise. They cover exhausted retry waits, manual confirmation-only recovery, retained token after failed PUT, repeated taps, session reset and late completion.
 - Local HTTP tests send real bytes through a slow uplink, expire a 300 ms network budget, then recover with one token/session. They also test first-use sign/PUT/confirmation/save errors, lost successful response and a shortened cold-signing wait. Shortened budgets accelerate testing; real provider/hardware timing is not emulated.
 - Kiosk tests: **27 pass** across five selected uploader/probe/privacy/video/UI test files, including six actual thank-you component tests for absolute pending time despite touch, retry-to-QR, five-minute failure privacy reset and three-language help. Node 26 uses `NODE_OPTIONS=--no-experimental-webstorage` for jsdom's localStorage. No baseline assertion was removed.
