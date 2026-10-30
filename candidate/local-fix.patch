@@ -1,0 +1,89 @@
+--- a/capturism-app/src/components/screens/ByePage.tsx
++++ b/capturism-app/src/components/screens/ByePage.tsx
+@@ -8,6 +8,7 @@
+ import { SessionVideoBackground } from '../layout/SessionVideoBackground'
+ import { clearSessionVideo } from '../../lib/sessionVideo'
+ import { applyPresetWithRetry } from '../../lib/lightsClient'
++import { qrInactivityDelay } from '../../lib/qrWaitPolicy'
+ 
+ // Frame: 1920×1080. Centered glass panel (868×620 at left:526, top:277)
+ // holds the thank-you message, share prompt, QR code, and restart button.
+@@ -38,10 +39,9 @@
+     applyPresetWithRetry('off')
+   }, [])
+ 
+-  // Inactivity timer with reset-on-interaction. We arm a 5-minute timeout
+-  // when the page mounts and re-arm it on every pointerdown / keydown.
+-  // The customer can stand here scanning the QR for as long as they want —
+-  // the auto-return only fires after 5 full minutes of zero interaction.
++  // Pending downloads get up to ten minutes of inactivity, matching the
++  // uploader patience. When the token arrives this effect re-arms a fresh
++  // five-minute scanning window. Explicit restart still resets immediately.
+   useEffect(() => {
+     let timerId: number | null = null
+ 
+@@ -54,7 +54,9 @@
+     }
+     const arm = () => {
+       if (timerId !== null) window.clearTimeout(timerId)
+-      timerId = window.setTimeout(goHome, AUTO_RESET_MS)
++      timerId = window.setTimeout(goHome, qrInactivityDelay({
++        needsQr: wantsQrCode, hasToken: !!cloudToken, scanWindowMs: AUTO_RESET_MS,
++      }))
+     }
+ 
+     arm()
+@@ -66,7 +68,7 @@
+       window.removeEventListener('pointerdown', arm)
+       window.removeEventListener('keydown', arm)
+     }
+-  }, [navigate, reset])
++  }, [navigate, reset, wantsQrCode, cloudToken])
+ 
+   const handleRestart = () => {
+     clearSessionVideo()
+--- /dev/null
++++ b/capturism-app/src/lib/qrWaitPolicy.ts
+@@ -0,0 +1,10 @@
++// Waiting for an upload and giving a customer time to scan are different
++// deadlines. Explicit restart still ends the session immediately.
++export const QR_PENDING_WAIT_MS = 10 * 60_000
++export const QR_SCAN_WINDOW_MS = 5 * 60_000
++
++export function qrInactivityDelay({
++  needsQr, hasToken, scanWindowMs = QR_SCAN_WINDOW_MS,
++}: { needsQr: boolean; hasToken: boolean; scanWindowMs?: number }): number {
++  return needsQr && !hasToken ? QR_PENDING_WAIT_MS : scanWindowMs
++}
+--- a/capturism-app/src/lib/relayUpload.ts
++++ b/capturism-app/src/lib/relayUpload.ts
+@@ -343,17 +343,24 @@
+ }): Promise<SignUploadResponse> {
+   const deadline = Date.now() + args.retryForMs
+   let token: string | undefined
++  let uploaded: SignUploadResponse | undefined
+   let attempt = 0
+   for (;;) {
+     attempt += 1
+     if (getSessionEpoch() !== args.epoch) throw new Error(SESSION_ENDED_MSG)
+     try {
+-      const signed = await signUpload(args.photoCt, token, 'photo')
+-      token = signed.token
+-      await putToR2(signed.uploadUrl, args.photo, args.photoCt)
+-      await commitPhotosReady(signed.token, signed.key, undefined, undefined, undefined, args.willHaveVideos)
++      // A failed confirmation does not mean the PUT failed. Keep the
++      // completed upload and retry its registration without saturating
++      // the booth uplink again. Failed PUTs still get fresh signed URLs.
++      if (!uploaded) {
++        const signed = await signUpload(args.photoCt, token, 'photo')
++        token = signed.token
++        await putToR2(signed.uploadUrl, args.photo, args.photoCt)
++        uploaded = signed
++      }
++      await commitPhotosReady(uploaded.token, uploaded.key, undefined, undefined, undefined, args.willHaveVideos)
+       if (attempt > 1) console.log(`[UPLOAD] photo landed on attempt ${attempt}`)
+-      return signed
++      return uploaded
+     } catch (err) {
+       const msg = (err as Error).message
+       const waitMs = Math.min(30_000, 2_000 * attempt)
