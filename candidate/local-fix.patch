@@ -1209,7 +1209,15 @@
  }), {
 --- a/capturism-download/src/components/DownloadPage.tsx
 +++ b/capturism-download/src/components/DownloadPage.tsx
-@@ -39,23 +39,15 @@
+@@ -5,6 +5,7 @@
+ import { ActionMenu } from './ActionMenu'
+ import { ShareButtons } from './ShareButtons'
+ import { Logo } from './Logo'
++import { readDownload } from '../lib/readDownload'
+ 
+ interface SessionData {
+   /** Final print image — shown in the centre PhotoCard. */
+@@ -39,23 +40,16 @@
  }
  
  export function DownloadPage() {
@@ -1221,6 +1229,7 @@
 +  const [errorMessage, setErrorMessage] = useState<string>(() => token && !RELAY_URL ? 'Server not configured' : '')
 +  const [retryable, setRetryable] = useState(false)
 +  const [attempt, setAttempt] = useState(0)
++  const [pollStartedAt] = useState(Date.now)
  
    useEffect(() => {
 -    const token = getTokenFromPath()
@@ -1239,26 +1248,53 @@
      const controller = new AbortController()
  
      // ── Wait for the video ──────────────────────────────────────────
-@@ -106,8 +98,8 @@
-       signal: controller.signal,
-     })
-       .then(async (res) => {
+@@ -100,30 +94,12 @@
+     const POLL_FAST_UNTIL_MS = 40_000
+     const POLL_LIMIT_MS = 11 * 60_000
+     let pollTimer: number | undefined
+-    const startedAt = Date.now()
+-
+-    const load = () => fetch(`${RELAY_URL}/api/download/${encodeURIComponent(token)}`, {
+-      signal: controller.signal,
+-    })
+-      .then(async (res) => {
 -        if (res.status === 404) {
 -          throw new Error('This link has expired or is invalid.')
-+        if (res.status === 404 || res.status === 410) {
-+          throw Object.assign(new Error('This link has expired or is invalid.'), { terminal: true })
-         }
-         if (!res.ok) {
-           throw new Error('Could not load your photos. Please try again.')
-@@ -124,6 +116,7 @@
-         videoPending?: boolean
-         date: string
-       }) => {
+-        }
+-        if (!res.ok) {
+-          throw new Error('Could not load your photos. Please try again.')
+-        }
+-        return res.json()
+-      })
+-      .then((data: {
+-        photoUrl: string
+-        videoUrl: string | null
+-        layoutVideoUrl?: string | null
+-        storyVideoUrl?: string | null
+-        photoDownloadUrl?: string | null
+-        videoDownloadUrl?: string | null
+-        videoPending?: boolean
+-        date: string
+-      }) => {
++    const load = () => readDownload<{
++      photoUrl: string; videoUrl: string | null; layoutVideoUrl?: string | null; storyVideoUrl?: string | null
++      photoDownloadUrl?: string | null; videoDownloadUrl?: string | null; videoPending?: boolean; date: string
++    }>(`${RELAY_URL}/api/download/${encodeURIComponent(token)}`, controller.signal)
++      .then((data) => {
 +        if (controller.signal.aborted) return
          setSession({
            photoUrl: data.photoUrl,
            videoUrl: data.videoUrl ?? undefined,
-@@ -149,7 +142,8 @@
+@@ -137,7 +113,7 @@
+         setState('ready')
+         // Still uploading? Come back for it shortly.
+         if (data.videoPending === true) {
+-          const elapsed = Date.now() - startedAt
++          const elapsed = Date.now() - pollStartedAt
+           if (elapsed < POLL_LIMIT_MS) {
+             pollTimer = window.setTimeout(load, elapsed < POLL_FAST_UNTIL_MS ? POLL_FAST_MS : POLL_SLOW_MS)
+           } else {
+@@ -149,7 +125,8 @@
          }
        })
        .catch((err) => {
@@ -1268,16 +1304,16 @@
          setState('error')
          setErrorMessage(err.message || 'Something went wrong.')
        })
-@@ -160,7 +154,7 @@
+@@ -160,7 +137,7 @@
        controller.abort()
        if (pollTimer) window.clearTimeout(pollTimer)
      }
 -  }, [])
-+  }, [attempt, token])
++  }, [attempt, token, pollStartedAt])
  
    const formattedDate = session.date
      ? new Date(session.date).toLocaleDateString('en-GB', {
-@@ -224,14 +218,27 @@
+@@ -224,14 +201,27 @@
          )}
  
          {state === 'error' && (
@@ -1307,6 +1343,42 @@
            </div>
          )}
  
+--- /dev/null
++++ b/capturism-download/src/lib/readDownload.ts
+@@ -0,0 +1,33 @@
++/** A single deadline covers headers and JSON, even if a transport ignores abort. */
++export async function readDownload<T>(url: string, signal: AbortSignal): Promise<T> {
++  const aborted = () => new DOMException('Download read cancelled', 'AbortError')
++  if (signal.aborted) throw aborted()
++  const controller = new AbortController()
++  const deadline = Date.now() + 20_000
++  const timedOut = () => new Error('The connection is taking too long. Please try again.')
++  let timer: ReturnType<typeof setTimeout> | undefined
++  let onAbort = () => {}
++  const interrupted = new Promise<never>((_, reject) => {
++    onAbort = () => { reject(aborted()); controller.abort() }
++    signal.addEventListener('abort', onAbort, { once: true })
++    timer = setTimeout(() => { reject(timedOut()); controller.abort() }, 20_000)
++  })
++  const request = (async () => {
++    const response = await fetch(url, { signal: controller.signal })
++    if (response.status === 404 || response.status === 410) {
++      throw Object.assign(new Error('This link has expired or is invalid.'), { terminal: true })
++    }
++    if (!response.ok) throw new Error('Could not load your photos. Please try again.')
++    return await response.json() as T
++  })()
++  try {
++    const data = await Promise.race([request, interrupted])
++    // Also enforce the wall-clock deadline after a suspended main thread wakes.
++    if (signal.aborted) throw aborted()
++    if (Date.now() >= deadline) { controller.abort(); throw timedOut() }
++    return data
++  } finally {
++    clearTimeout(timer)
++    signal.removeEventListener('abort', onAbort)
++  }
++}
 --- /dev/null
 +++ b/capturism-relay/pool-publication.cjs
 @@ -0,0 +1,152 @@
@@ -2002,6 +2074,24 @@
    if (!session) {
      return jsonResponse(res, 404, { error: "Not found or expired" });
    }
+@@ -868,7 +872,7 @@
+         !!session.videosPending &&
+         !videoUrl &&
+         !layoutVideoUrl &&
+-        Date.now() - session.createdAt < VIDEO_PENDING_GRACE_MS,
++        Date.now() - session.videoWaitStartedAt < VIDEO_PENDING_GRACE_MS,
+       // Past the grace window with nothing to show: this session was
+       // PROMISED a video and never got one. Say so. Until now the
+       // pending row simply vanished, which a customer reads as the
+@@ -879,7 +883,7 @@
+         !videoUrl &&
+         !layoutVideoUrl &&
+         !storyVideoUrl &&
+-        Date.now() - session.createdAt >= VIDEO_PENDING_GRACE_MS,
++        Date.now() - session.videoWaitStartedAt >= VIDEO_PENDING_GRACE_MS,
+       date: new Date(session.createdAt).toISOString(),
+       expiresAt: new Date(session.expiresAt).toISOString(),
+     });
 @@ -901,7 +905,13 @@
   * possession of the token = right to read the file.
   */
@@ -2256,7 +2346,7 @@
    console.log(`[RELAY] Registered booths: ${[...BOOTH_API_KEYS.keys()].join(", ") || "none"}`);
 --- /dev/null
 +++ b/capturism-relay/session-metadata.cjs
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,196 @@
 +'use strict';
 +const { createHash } = require('node:crypto');
 +
@@ -2281,6 +2371,7 @@
 +  function validate(data) {
 +    if (!data || typeof data !== 'object' || !validKey(data.photoKey) || typeof data.boothId !== 'string' || !data.boothId ||
 +        !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt) || data.expiresAt <= data.createdAt ||
++        (data.videoWaitStartedAt !== undefined && (!Number.isFinite(data.videoWaitStartedAt) || data.videoWaitStartedAt < data.createdAt || data.videoWaitStartedAt >= data.expiresAt)) ||
 +        MEDIA.some(field => data[field] !== undefined && !validKey(data[field]))) throw failure(503, 'Invalid stored download metadata');
 +  }
 +  async function readObject(key, validator) {
@@ -2348,6 +2439,35 @@
 +      return proof;
 +    });
 +  }
++  async function videoClock(token, proof, startedAt) {
++    // Separate create-only clock: metadata cleanup/replay cannot restart waiting.
++    // Legacy or partial restores use their earliest known durable creation time.
++    const key = `qr-video-wait/v1/${hash(token)}.json`;
++    const validateClock = data => {
++      validateExpiry(data);
++      if (data.identityHash !== proof.identityHash || data.createdAt !== proof.createdAt || data.expiresAt !== proof.expiresAt ||
++          !Number.isFinite(data.startedAt) || data.startedAt < proof.createdAt || data.startedAt >= proof.expiresAt) throw failure(503, 'Invalid video wait clock');
++    };
++    let candidate;
++    for (let attempt = 0; attempt < 5; attempt++) {
++      const stored = await readObject(key, validateClock);
++      if (stored) {
++        if (startedAt !== undefined && stored.data.startedAt !== startedAt) throw failure(503, 'Video wait clock conflict');
++        return stored.data.startedAt;
++      }
++      if (startedAt === undefined) return null;
++      if (!candidate) {
++        if (startedAt >= proof.expiresAt) { cache.delete(token); throw failure(410, 'Download session expired'); }
++        candidate = { version: 1, identityHash: proof.identityHash, createdAt: proof.createdAt, expiresAt: proof.expiresAt, startedAt };
++        validateClock(candidate);
++      }
++      try {
++        await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(candidate), ContentType: 'application/json', IfNoneMatch: '*' }));
++        return candidate.startedAt;
++      } catch (err) { if (!conflict(err)) throw err; }
++    }
++    throw failure(503, 'Video wait clock contention');
++  }
 +  async function change(token, input, patchOnly) {
 +    keyFor(token);
 +    if (!input || typeof input !== 'object' || Array.isArray(input)) throw failure(400, 'Invalid download metadata');
@@ -2364,16 +2484,24 @@
 +        if (!patchOnly && identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
 +        if (!old && patchOnly) throw failure(503, 'Download metadata missing');
 +        if (old && !patchOnly && (old.photoKey !== input.photoKey || old.boothId !== input.boothId)) throw failure(409, 'Download identity conflict');
++        for (const field of MEDIA) {
++          if (input[field] && old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
++        }
++        const savedClock = await videoClock(token, proof);
++        const videoWaitStartedAt = savedClock ?? old?.videoWaitStartedAt ?? old?.createdAt ?? now();
++        if (old?.videoWaitStartedAt !== undefined && old.videoWaitStartedAt !== videoWaitStartedAt) throw failure(503, 'Video wait clock conflict');
++        if (videoWaitStartedAt >= proof.expiresAt) { cache.delete(token); throw failure(410, 'Download session expired'); }
++        live(token, proof);
 +        const createdAt = proof.createdAt;
-+        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt };
++        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt, videoWaitStartedAt };
 +        for (const field of MEDIA) {
 +          if (input[field] == null || input[field] === '') continue;
-+          if (old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
 +          next[field] = input[field];
 +        }
 +        // Omitted fields and photo-only replays cannot erase completed videos
 +        // or restart the original waiting/retention clocks.
 +        if (input.videosPending === true) next.videosPending = true;
++        validate(next);
 +        if (!old || JSON.stringify(next) !== JSON.stringify(old)) {
 +          try {
 +            await client.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(token), Body: JSON.stringify(next), ContentType: 'application/json',
@@ -2383,8 +2511,14 @@
 +        // No false-success cache mutation: only an acknowledged PUT or a fresh
 +        // durable read of an already-identical commit reaches this point.
 +        if (next.expiresAt <= now()) { cache.delete(token); throw failure(410, 'Download session expired'); }
-+        cache.set(token, next);
-+        return next;
++        // Only a durable metadata commit establishes first confirmation. Failed
++        // metadata attempts leave no clock behind; a lost ACK is reconciled from
++        // the timestamp in that commit. The independent record survives cleanup.
++        if (savedClock === null) await videoClock(token, proof, videoWaitStartedAt);
++        live(token, proof);
++        const committed = { ...next, videoWaitStartedAt };
++        cache.set(token, committed);
++        return committed;
 +      }
 +      throw failure(503, 'Download metadata contention');
 +    });
@@ -2394,7 +2528,14 @@
 +    let data = cache.get(token);
 +    if (!data) {
 +      const stored = await read(token); data = stored?.data;
-+      if (data) { const proof = await authority(token, data); if (!proof || proof.expiresAt <= now()) return null; }
++      if (data) {
++        const proof = await authority(token, data);
++        if (!proof || proof.expiresAt <= now()) return null;
++        const savedClock = await videoClock(token, proof);
++        const startedAt = savedClock ?? data.videoWaitStartedAt ?? data.createdAt;
++        if (data.videoWaitStartedAt !== undefined && data.videoWaitStartedAt !== startedAt) throw failure(503, 'Video wait clock conflict');
++        data = { ...data, videoWaitStartedAt: savedClock ?? await videoClock(token, proof, startedAt) };
++      }
 +    }
 +    if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
 +    cache.set(token, data); return data;

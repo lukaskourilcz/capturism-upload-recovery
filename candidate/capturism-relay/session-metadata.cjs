@@ -22,6 +22,7 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
   function validate(data) {
     if (!data || typeof data !== 'object' || !validKey(data.photoKey) || typeof data.boothId !== 'string' || !data.boothId ||
         !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt) || data.expiresAt <= data.createdAt ||
+        (data.videoWaitStartedAt !== undefined && (!Number.isFinite(data.videoWaitStartedAt) || data.videoWaitStartedAt < data.createdAt || data.videoWaitStartedAt >= data.expiresAt)) ||
         MEDIA.some(field => data[field] !== undefined && !validKey(data[field]))) throw failure(503, 'Invalid stored download metadata');
   }
   async function readObject(key, validator) {
@@ -89,6 +90,35 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
       return proof;
     });
   }
+  async function videoClock(token, proof, startedAt) {
+    // Separate create-only clock: metadata cleanup/replay cannot restart waiting.
+    // Legacy or partial restores use their earliest known durable creation time.
+    const key = `qr-video-wait/v1/${hash(token)}.json`;
+    const validateClock = data => {
+      validateExpiry(data);
+      if (data.identityHash !== proof.identityHash || data.createdAt !== proof.createdAt || data.expiresAt !== proof.expiresAt ||
+          !Number.isFinite(data.startedAt) || data.startedAt < proof.createdAt || data.startedAt >= proof.expiresAt) throw failure(503, 'Invalid video wait clock');
+    };
+    let candidate;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const stored = await readObject(key, validateClock);
+      if (stored) {
+        if (startedAt !== undefined && stored.data.startedAt !== startedAt) throw failure(503, 'Video wait clock conflict');
+        return stored.data.startedAt;
+      }
+      if (startedAt === undefined) return null;
+      if (!candidate) {
+        if (startedAt >= proof.expiresAt) { cache.delete(token); throw failure(410, 'Download session expired'); }
+        candidate = { version: 1, identityHash: proof.identityHash, createdAt: proof.createdAt, expiresAt: proof.expiresAt, startedAt };
+        validateClock(candidate);
+      }
+      try {
+        await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(candidate), ContentType: 'application/json', IfNoneMatch: '*' }));
+        return candidate.startedAt;
+      } catch (err) { if (!conflict(err)) throw err; }
+    }
+    throw failure(503, 'Video wait clock contention');
+  }
   async function change(token, input, patchOnly) {
     keyFor(token);
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw failure(400, 'Invalid download metadata');
@@ -105,16 +135,24 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         if (!patchOnly && identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
         if (!old && patchOnly) throw failure(503, 'Download metadata missing');
         if (old && !patchOnly && (old.photoKey !== input.photoKey || old.boothId !== input.boothId)) throw failure(409, 'Download identity conflict');
+        for (const field of MEDIA) {
+          if (input[field] && old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
+        }
+        const savedClock = await videoClock(token, proof);
+        const videoWaitStartedAt = savedClock ?? old?.videoWaitStartedAt ?? old?.createdAt ?? now();
+        if (old?.videoWaitStartedAt !== undefined && old.videoWaitStartedAt !== videoWaitStartedAt) throw failure(503, 'Video wait clock conflict');
+        if (videoWaitStartedAt >= proof.expiresAt) { cache.delete(token); throw failure(410, 'Download session expired'); }
+        live(token, proof);
         const createdAt = proof.createdAt;
-        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt };
+        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt, videoWaitStartedAt };
         for (const field of MEDIA) {
           if (input[field] == null || input[field] === '') continue;
-          if (old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
           next[field] = input[field];
         }
         // Omitted fields and photo-only replays cannot erase completed videos
         // or restart the original waiting/retention clocks.
         if (input.videosPending === true) next.videosPending = true;
+        validate(next);
         if (!old || JSON.stringify(next) !== JSON.stringify(old)) {
           try {
             await client.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(token), Body: JSON.stringify(next), ContentType: 'application/json',
@@ -124,8 +162,14 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         // No false-success cache mutation: only an acknowledged PUT or a fresh
         // durable read of an already-identical commit reaches this point.
         if (next.expiresAt <= now()) { cache.delete(token); throw failure(410, 'Download session expired'); }
-        cache.set(token, next);
-        return next;
+        // Only a durable metadata commit establishes first confirmation. Failed
+        // metadata attempts leave no clock behind; a lost ACK is reconciled from
+        // the timestamp in that commit. The independent record survives cleanup.
+        if (savedClock === null) await videoClock(token, proof, videoWaitStartedAt);
+        live(token, proof);
+        const committed = { ...next, videoWaitStartedAt };
+        cache.set(token, committed);
+        return committed;
       }
       throw failure(503, 'Download metadata contention');
     });
@@ -135,7 +179,14 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
     let data = cache.get(token);
     if (!data) {
       const stored = await read(token); data = stored?.data;
-      if (data) { const proof = await authority(token, data); if (!proof || proof.expiresAt <= now()) return null; }
+      if (data) {
+        const proof = await authority(token, data);
+        if (!proof || proof.expiresAt <= now()) return null;
+        const savedClock = await videoClock(token, proof);
+        const startedAt = savedClock ?? data.videoWaitStartedAt ?? data.createdAt;
+        if (data.videoWaitStartedAt !== undefined && data.videoWaitStartedAt !== startedAt) throw failure(503, 'Video wait clock conflict');
+        data = { ...data, videoWaitStartedAt: savedClock ?? await videoClock(token, proof, startedAt) };
+      }
     }
     if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
     cache.set(token, data); return data;

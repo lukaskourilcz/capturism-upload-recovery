@@ -19,7 +19,7 @@ test('legacy adoption save failure preserves original metadata and cold retry ke
   assert.equal(store.objects.get(KEY), bytes); assert.equal(store.objects.has(PROOF), false);
   const restarted = makeQrRelay(store, options), recovered = await restarted.download(TOKEN);
   assert.equal(recovered.status, 200); assert.equal(Date.parse(recovered.body.expiresAt), legacy.expiresAt);
-  assert.equal(store.objects.get(KEY), bytes); assert.equal(store.writes, 1);
+  assert.equal(store.objects.get(KEY), bytes); assert.equal(store.writes, 2);
 });
 
 test('lost legacy proof acknowledgement reconciles after restart without rewriting identity or clock', async () => {
@@ -28,13 +28,13 @@ test('lost legacy proof acknowledgement reconciles after restart without rewriti
   assert.equal((await makeQrRelay(store, options).download(TOKEN)).status, 503);
   const proof = store.objects.get(PROOF); assert.ok(proof);
   assert.equal((await makeQrRelay(store, options).download(TOKEN)).status, 200);
-  assert.equal(store.objects.get(KEY), bytes); assert.equal(store.objects.get(PROOF), proof); assert.equal(store.writes, 1);
+  assert.equal(store.objects.get(KEY), bytes); assert.equal(store.objects.get(PROOF), proof); assert.equal(store.writes, 2);
 });
 
 test('two cold relays adopt legacy metadata once and retain video/history fields', async () => {
   const store = seed(), bytes = store.objects.get(KEY);
   const results = await Promise.all([makeQrRelay(store, options).download(TOKEN), makeQrRelay(store, options).download(TOKEN)]);
-  assert.deepEqual(results.map(r => r.status), [200,200]); assert.equal(store.writes, 1);
+  assert.deepEqual(results.map(r => r.status), [200,200]); assert.equal(store.writes, 2);
   const proof = JSON.parse(store.objects.get(PROOF));
   assert.equal(proof.createdAt, legacy.createdAt); assert.equal(proof.expiresAt, legacy.expiresAt);
   assert.equal(store.objects.get(KEY), bytes);
@@ -47,7 +47,7 @@ test('legacy noncanonical photo keys still permit video signing and replay with 
   assert.equal((await relay.confirm({ ...BODY, photoKey: original.photoKey })).status, 200);
   assert.deepEqual(JSON.parse(store.objects.get(KEY)), original);
   assert.equal((await relay.sign({ token: TOKEN, kind: 'photo', contentType: 'image/jpeg' })).status, 409);
-  assert.equal(store.writes, 1);
+  assert.equal(store.writes, 2);
 });
 
 test('unreadable existing expiry proof is never interpreted as missing legacy authority', async () => {

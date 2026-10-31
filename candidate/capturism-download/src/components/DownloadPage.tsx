@@ -5,6 +5,7 @@ import { PhotoCard } from './PhotoCard'
 import { ActionMenu } from './ActionMenu'
 import { ShareButtons } from './ShareButtons'
 import { Logo } from './Logo'
+import { readDownload } from '../lib/readDownload'
 
 interface SessionData {
   /** Final print image — shown in the centre PhotoCard. */
@@ -45,6 +46,7 @@ export function DownloadPage() {
   const [errorMessage, setErrorMessage] = useState<string>(() => token && !RELAY_URL ? 'Server not configured' : '')
   const [retryable, setRetryable] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  const [pollStartedAt] = useState(Date.now)
 
   useEffect(() => {
     if (!token || !RELAY_URL) return
@@ -92,30 +94,11 @@ export function DownloadPage() {
     const POLL_FAST_UNTIL_MS = 40_000
     const POLL_LIMIT_MS = 11 * 60_000
     let pollTimer: number | undefined
-    const startedAt = Date.now()
-
-    const load = () => fetch(`${RELAY_URL}/api/download/${encodeURIComponent(token)}`, {
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (res.status === 404 || res.status === 410) {
-          throw Object.assign(new Error('This link has expired or is invalid.'), { terminal: true })
-        }
-        if (!res.ok) {
-          throw new Error('Could not load your photos. Please try again.')
-        }
-        return res.json()
-      })
-      .then((data: {
-        photoUrl: string
-        videoUrl: string | null
-        layoutVideoUrl?: string | null
-        storyVideoUrl?: string | null
-        photoDownloadUrl?: string | null
-        videoDownloadUrl?: string | null
-        videoPending?: boolean
-        date: string
-      }) => {
+    const load = () => readDownload<{
+      photoUrl: string; videoUrl: string | null; layoutVideoUrl?: string | null; storyVideoUrl?: string | null
+      photoDownloadUrl?: string | null; videoDownloadUrl?: string | null; videoPending?: boolean; date: string
+    }>(`${RELAY_URL}/api/download/${encodeURIComponent(token)}`, controller.signal)
+      .then((data) => {
         if (controller.signal.aborted) return
         setSession({
           photoUrl: data.photoUrl,
@@ -130,7 +113,7 @@ export function DownloadPage() {
         setState('ready')
         // Still uploading? Come back for it shortly.
         if (data.videoPending === true) {
-          const elapsed = Date.now() - startedAt
+          const elapsed = Date.now() - pollStartedAt
           if (elapsed < POLL_LIMIT_MS) {
             pollTimer = window.setTimeout(load, elapsed < POLL_FAST_UNTIL_MS ? POLL_FAST_MS : POLL_SLOW_MS)
           } else {
@@ -154,7 +137,7 @@ export function DownloadPage() {
       controller.abort()
       if (pollTimer) window.clearTimeout(pollTimer)
     }
-  }, [attempt, token])
+  }, [attempt, token, pollStartedAt])
 
   const formattedDate = session.date
     ? new Date(session.date).toLocaleDateString('en-GB', {

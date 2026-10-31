@@ -40,10 +40,12 @@ test('unknown tokens and partial restores without expiry or metadata cannot esta
   assert.equal((await relay.confirm(BODY)).status, 410);
   assert.equal((await relay.sign({ token: TOKEN, kind: 'photo', contentType: 'image/jpeg' })).status, 410);
   await relay.issue(); await relay.confirm(BODY); store.objects.delete(EXPIRY); store.objects.delete(KEY);
+  const remaining = new Map(store.objects);
   const cold = makeQrRelay(store);
   assert.equal((await cold.confirm(BODY)).status, 410);
   assert.equal((await cold.sign({ token: TOKEN, kind: 'photo', contentType: 'image/jpeg' })).status, 410);
-  assert.equal(store.objects.size, 0);
+  assert.equal(store.objects.size, 1); assert.ok([...store.objects.keys()][0].startsWith('qr-video-wait/v1/'));
+  assert.deepEqual(store.objects, remaining);
 });
 
 test('legacy metadata is anchored with its exact original identity and clocks before recovery', async () => {

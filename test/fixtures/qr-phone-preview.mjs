@@ -4,16 +4,21 @@ import http from 'node:http';
 import { existsSync } from 'node:fs';
 import { storage } from '../helpers/relay-fixture.mjs';
 import { makeQrRelay, PHOTO, BODY, TOKEN } from '../helpers/qr-relay-fixture.mjs';
-const flag = process.argv[2];
+const flag = process.argv[2], stall = process.argv[3] === 'stall';
 if (!flag) throw new Error('Supply local read-failure flag path');
 const store = storage();
 let base;
 let relay = makeQrRelay(store, { signR2Url: async () => base + '/photo.svg' });
 await relay.issue(); await relay.confirm(BODY);
 relay = makeQrRelay(store, { signR2Url: async () => base + '/photo.svg' });
-store.beforeGet = async () => { if (existsSync(flag)) throw new Error('Synthetic cold read outage'); };
+store.beforeGet = async () => {
+  if (!existsSync(flag)) return;
+  if (stall) return new Promise(() => {});
+  throw new Error('Synthetic cold read outage');
+};
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:4321'); res.setHeader('Cache-Control', 'no-store');
+  res.on('close', () => { if (!res.writableEnded) console.log(JSON.stringify({ event: 'read-aborted', method: req.method, path: req.url, storageWrites: store.writes })); });
   res.on('finish', () => console.log(JSON.stringify({ method: req.method, path: req.url, status: res.statusCode, storageWrites: store.writes })));
   if (req.method === 'GET' && req.url === '/api/download/' + TOKEN) return void relay.handleGetDownload(req, res, TOKEN);
   if (req.method === 'GET' && req.url === '/photo.svg') {

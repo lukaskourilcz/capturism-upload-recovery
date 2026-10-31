@@ -23,7 +23,8 @@ store.send = async command => {
 let base;
 const relay = makeQrRelay(store, { now: () => process.argv[4] ? Number(process.argv[4]) : Date.now(), signR2Url: async key => base + '/object?key=' + encodeURIComponent(key) });
 if (fresh) await relay.issue();
-store.failWrites = process.argv[3] === 'fail' ? 1 : 0;
+let failMetadata = process.argv[3] === 'fail';
+store.beforePut = async ({ Key }) => { if (Key.endsWith('/meta.json') && failMetadata) { failMetadata = false; throw new Error('Metadata save failure'); } };
 const server = http.createServer((req, res) => {
   if (req.url === '/confirm') return relay.handlePhotosReady(req, res);
   if (req.url.startsWith('/download/')) return void relay.handleGetDownload(req, res, req.url.split('/')[2]);

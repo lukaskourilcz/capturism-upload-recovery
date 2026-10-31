@@ -872,7 +872,7 @@ async function handleGetDownload(req, res, token) {
         !!session.videosPending &&
         !videoUrl &&
         !layoutVideoUrl &&
-        Date.now() - session.createdAt < VIDEO_PENDING_GRACE_MS,
+        Date.now() - session.videoWaitStartedAt < VIDEO_PENDING_GRACE_MS,
       // Past the grace window with nothing to show: this session was
       // PROMISED a video and never got one. Say so. Until now the
       // pending row simply vanished, which a customer reads as the
@@ -883,7 +883,7 @@ async function handleGetDownload(req, res, token) {
         !videoUrl &&
         !layoutVideoUrl &&
         !storyVideoUrl &&
-        Date.now() - session.createdAt >= VIDEO_PENDING_GRACE_MS,
+        Date.now() - session.videoWaitStartedAt >= VIDEO_PENDING_GRACE_MS,
       date: new Date(session.createdAt).toISOString(),
       expiresAt: new Date(session.expiresAt).toISOString(),
     });

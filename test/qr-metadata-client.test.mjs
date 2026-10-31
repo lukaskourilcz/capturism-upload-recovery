@@ -42,20 +42,20 @@ test('real QR client retains its checkpoint until actual relay metadata is durab
     for (const scenario of ['save-failure', 'lost-storage-ack', 'deadline-then-manual-recovery']) await t.test(scenario, async () => {
       store = storage(); relay = makeQrRelay(store); counts = { sign: 0, put: 0, confirm: 0 }; statuses = []; await relay.issue();
       const metadataKey = `sessions/${TOKEN}/meta.json`;
-      if (scenario === 'save-failure') store.failWrites = 1;
+      let failSaves = scenario === 'save-failure' ? 1 : scenario === 'deadline-then-manual-recovery' ? 10 : 0;
+      store.beforePut = async ({ Key }) => { if (Key === metadataKey && failSaves-- > 0) throw new Error('Metadata save unavailable'); };
       if (scenario === 'lost-storage-ack') {
         let once = false;
-        store.afterPut = async () => { if (!once) { once = true; throw new Error('Lost provider ACK'); } };
+        store.afterPut = async ({ Key }) => { if (Key === metadataKey && !once) { once = true; throw new Error('Lost provider ACK'); } };
       }
       if (scenario === 'deadline-then-manual-recovery') {
-        store.failWrites = 10;
         await assert.rejects(client.uploadSessionToCloud({ photo, retryForMs: 200 }), { name: 'UploadDeadlineError' });
         assert.equal(client.getQrUploadState().phase, 'failed'); assert.equal(client.getQrUploadState().canRetry, true);
         assert.equal(store.objects.has(metadataKey), false); assert.equal(relay.cache.size, 0); assert.equal(relay.notifications.length, 0);
-        store.failWrites = 0; assert.equal(await client.retryQrUpload(), TOKEN);
+        failSaves = 0; assert.equal(await client.retryQrUpload(), TOKEN);
       } else assert.equal(await client.uploadSessionToCloud({ photo, retryForMs: 5000 }), TOKEN);
       assert.deepEqual(statuses, [503,200]); assert.equal(counts.sign, 1); assert.equal(counts.put, 1); assert.equal(counts.confirm, 2);
-      assert.equal(store.writes, 2); assert.equal(relay.notifications.length, 1);
+      assert.equal(store.writes, 3); assert.equal(relay.notifications.length, 1);
       const originalMetadata = store.objects.get(metadataKey), originalPhoto = store.objects.get(PHOTO);
       relay = makeQrRelay(store); // Relay loses all cache, provider state remains.
       const download = await nativeFetch(base + '/download/' + TOKEN); assert.equal(download.status, 200); await download.text();

@@ -1,4 +1,4 @@
-// Successful exit reproduces OPEN R7, not a safety assertion.
+// Successful exit now verifies the restored video grace on actual handlers.
 // Compare actual captured and candidate handlers with synthetic local storage.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -15,12 +15,12 @@ for (const version of ['baseline', 'candidate']) {
   assert.equal((await relay.confirm({ ...BODY, videosPending: true })).status, 200);
   clock = start + 11 * minute; // only 2m after first successful photo confirmation
   const response = await relay.download(TOKEN); assert.equal(response.status, 200);
-  assert.equal(response.body.videoPending, version === 'baseline');
-  assert.equal(response.body.videoFailed, version === 'candidate');
+  assert.equal(response.body.videoPending, true);
+  assert.equal(response.body.videoFailed, false);
   const cold = await makeQrRelay(store, options).download(TOKEN);
   assert.equal(cold.body.videoPending, response.body.videoPending);
   results.push({ version, photoConfirmedAfterMinutes: 9, downloadAfterConfirmationMinutes: 2,
     videoPending: response.body.videoPending, videoFailed: response.body.videoFailed,
     coldVideoPending: cold.body.videoPending, qrUnexpired: Date.parse(response.body.expiresAt) > clock });
 }
-console.log(JSON.stringify({ finding: 'R7', interpretation: 'Premature video wait cutoff reproduced, not fixed. Expiry proof clock consumes the former first-confirmation video grace.', results }, null, 2));
+console.log(JSON.stringify({ finding: 'R7', interpretation: 'Fixed locally: both versions keep waiting two minutes after a slow first photo confirmation; candidate retention remains based on original issuance.', results }, null, 2));

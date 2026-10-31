@@ -12,11 +12,11 @@ const KEY = `sessions/${TOKEN}/meta.json`;
 const saved = store => JSON.parse(store.objects.get(KEY).toString());
 
 test('failed QR save returns 503, has no success cache/notice, and same-token retry survives restart', async () => {
-  const store = storage(), relay = makeQrRelay(store); await relay.issue(); store.objects.set(PHOTO, Buffer.alloc(32, 7)); store.failWrites = 1;
+  const store = storage(), relay = makeQrRelay(store); await relay.issue(); store.objects.set(PHOTO, Buffer.alloc(32, 7)); let fail = true; store.beforePut = async ({ Key }) => { if (Key.endsWith('/meta.json') && fail) { fail = false; throw new Error('Metadata save unavailable'); } };
   assert.equal((await relay.confirm(BODY)).status, 503);
   assert.equal(relay.cache.size, 0); assert.equal(relay.notifications.length, 0); assert.equal(store.objects.has(KEY), false);
   assert.equal((await relay.download(TOKEN)).status, 404);
-  assert.equal((await relay.confirm(BODY)).status, 200); assert.equal(store.writes, 2);
+  assert.equal((await relay.confirm(BODY)).status, 200); assert.equal(store.writes, 3);
   const restarted = makeQrRelay(store); assert.equal(restarted.cache.size, 0);
   const download = await restarted.download(TOKEN); assert.equal(download.status, 200); assert.ok(download.body.photoUrl);
   assert.equal(store.objects.has(PHOTO), true);
@@ -25,10 +25,10 @@ test('failed QR save returns 503, has no success cache/notice, and same-token re
 test('lost storage acknowledgement is reconciled by durable read without another write or renewed expiry', async () => {
   const store = storage(); let clock = 1000000, failed = false;
   const relay = makeQrRelay(store, { now: () => clock }); await relay.issue();
-  store.afterPut = async () => { if (!failed) { failed = true; throw new Error('Lost storage acknowledgement'); } };
+  store.afterPut = async ({ Key: key }) => { if (key === KEY && !failed) { failed = true; throw new Error('Lost storage acknowledgement'); } };
   assert.equal((await relay.confirm(BODY)).status, 503); assert.equal(relay.cache.size, 0); assert.equal(relay.notifications.length, 0);
   const original = saved(store); clock += 50000;
-  assert.equal((await relay.confirm(BODY)).status, 200); assert.equal(store.writes, 2); assert.deepEqual(saved(store), original);
+  assert.equal((await relay.confirm(BODY)).status, 200); assert.equal(store.writes, 3); assert.deepEqual(saved(store), original);
   assert.equal((await makeQrRelay(store, { now: () => clock }).download(TOKEN)).status, 200);
 });
 
@@ -44,7 +44,7 @@ test('photo-only replay after video delivery preserves video keys, unknown histo
   const final = saved(store);
   assert.equal(final.createdAt, original.createdAt); assert.equal(final.expiresAt, original.expiresAt);
   assert.equal(final.layoutVideoKey, videos.layoutVideoKey); assert.equal(final.storyVideoKey, videos.storyVideoKey);
-  assert.equal(final.historicalField, 'preserve'); assert.equal(store.writes, 3);
+  assert.equal(final.historicalField, 'preserve'); assert.equal(store.writes, 4);
   assert.equal(restarted.notifications[0].payload.layoutVideoKey, videos.layoutVideoKey);
 });
 
@@ -78,7 +78,7 @@ test('expired session cannot be revived by confirmation or discovery replay', as
 test('a save completing after retention expiry cannot acknowledge a usable QR or renew its clock', async () => {
   const store = storage(); let clock = 1000000;
   const relay = makeQrRelay(store, { now: () => clock }); await relay.issue();
-  store.beforePut = async () => { clock += 86400001; };
+  store.beforePut = async ({ Key: key }) => { if (key === KEY) clock += 86400001; };
   assert.equal((await relay.confirm(BODY)).status, 410);
   assert.equal(relay.cache.size, 0); assert.equal(relay.notifications.length, 0);
   assert.equal(saved(store).createdAt, 1000000); assert.equal(saved(store).expiresAt, 87400000);
@@ -92,7 +92,7 @@ test('exact expiry boundary rejects warm and cold replay without any metadata wr
     assert.equal((await current.confirm(BODY)).status, 410);
     assert.equal((await current.download(TOKEN)).status, 404);
   }
-  assert.equal(store.objects.get(KEY), original); assert.equal(store.writes, 2);
+  assert.equal(store.objects.get(KEY), original); assert.equal(store.writes, 3);
 });
 
 test('stale warm relay reconciles a photo replay from durable media without renewing retention', async () => {
@@ -102,7 +102,7 @@ test('stale warm relay reconciles a photo replay from durable media without rene
   assert.equal(stale.cache.get(TOKEN).layoutVideoKey, undefined);
   assert.equal((await stale.confirm(BODY)).status, 200);
   assert.ok(stale.cache.get(TOKEN).layoutVideoKey); assert.equal(saved(store).expiresAt, original.expiresAt);
-  assert.equal(store.writes, 3);
+  assert.equal(store.writes, 4);
 });
 
 test('conflicting photo, booth or completed video identity cannot overwrite a committed session', async () => {
@@ -111,7 +111,7 @@ test('conflicting photo, booth or completed video identity cannot overwrite a co
   assert.equal((await relay.confirm({ ...BODY, photoKey: 'different-photo' })).status, 409);
   assert.equal((await relay.confirm({ ...BODY, layoutVideoKey: 'different-video' })).status, 409);
   assert.equal((await makeQrRelay(store, { boothId: 'another-booth' }).confirm(BODY)).status, 409);
-  assert.deepEqual(saved(store), original); assert.equal(store.writes, 2);
+  assert.deepEqual(saved(store), original); assert.equal(store.writes, 3);
 });
 
 test('unavailable storage/read and invalid stored metadata fail closed rather than replacing an existing record', async () => {

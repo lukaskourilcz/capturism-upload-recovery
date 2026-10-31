@@ -65,3 +65,76 @@ describe('phone download recovery', () => {
     expect(fetcher).toHaveBeenCalledTimes(4); expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+describe('whole phone read deadline', () => {
+  it.each(['headers', 'body'])('times out stalled %s, retries once and ignores the old late result', async phase => {
+    vi.useFakeTimers()
+    let resolveOld!: (value: Response | typeof ready) => void
+    const never = new Promise<Response | typeof ready>(r => { resolveOld = r })
+    const body = new Response('{}'); body.json = () => never as Promise<typeof ready>
+    const fetcher = vi.fn().mockImplementationOnce(() => phase === 'headers' ? never : Promise.resolve(body))
+      .mockResolvedValueOnce(new Response(JSON.stringify(ready)))
+    vi.stubGlobal('fetch', fetcher)
+    await act(async () => root.render(<DownloadPage />)); await flush()
+    const signal = fetcher.mock.calls[0][1].signal as AbortSignal
+    await act(async () => { await vi.advanceTimersByTimeAsync(19999) })
+    expect(container.querySelector('button')).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) }); await flush()
+    expect(signal.aborted).toBe(true); expect(container.textContent).toContain('taking too long')
+    const button = container.querySelector('button')!
+    await act(async () => { button.click(); button.click() }); await flush()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    const old = { ...ready, photoUrl: 'http://127.0.0.1/stale.jpg' }
+    await act(async () => resolveOld(phase === 'headers' ? new Response(JSON.stringify(old)) : old)); await flush()
+    expect(container.querySelector('[data-photo]')?.getAttribute('data-photo')).toBe(ready.photoUrl)
+    expect(container.querySelector('[role="alert"]')).toBeNull(); expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('times out a stalled video poll and recovers with the same token', async () => {
+    vi.useFakeTimers()
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ ...ready, videoPending: true })))
+      .mockImplementationOnce(() => new Promise(() => {})).mockResolvedValueOnce(new Response(JSON.stringify(ready)))
+    vi.stubGlobal('fetch', fetcher)
+    await act(async () => root.render(<DownloadPage />)); await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(24000) }); await flush()
+    expect(container.textContent).toContain('taking too long')
+    expect(container.querySelector('[data-photo]')?.getAttribute('data-photo')).toBe(ready.photoUrl)
+    await act(async () => { container.querySelector('button')!.click() }); await flush()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    expect(fetcher.mock.calls.every(call => call[0].endsWith('/api/download/synthetic-token'))).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('rejects a response after the wall-clock deadline even before the timer runs', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: Response) => void
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(r => { resolve = r })))
+    await act(async () => root.render(<DownloadPage />)); await flush()
+    vi.setSystemTime(Date.now() + 20001)
+    await act(async () => resolve(new Response(JSON.stringify(ready)))); await flush()
+    expect(container.textContent).toContain('taking too long')
+    expect(container.querySelector('[data-photo]')).toBeNull()
+    expect(container.querySelector('button')?.textContent).toBe('Try again'); expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('manual retry does not renew the page polling budget', async () => {
+    vi.useFakeTimers()
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response('{}', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...ready, videoPending: true })))
+    vi.stubGlobal('fetch', fetcher)
+    await act(async () => root.render(<DownloadPage />)); await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(11 * 60000 + 1) })
+    await act(async () => { container.querySelector('button')!.click() }); await flush()
+    expect(vi.getTimerCount()).toBe(0); expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('expiry returned after a timed-out read remains terminal', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValueOnce(new Response('{}', { status: 410 })))
+    await act(async () => root.render(<DownloadPage />)); await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
+    await act(async () => { container.querySelector('button')!.click() }); await flush()
+    expect(container.textContent).toContain('expired or is invalid'); expect(container.querySelector('button')).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
