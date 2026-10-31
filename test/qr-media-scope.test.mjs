@@ -43,6 +43,7 @@ for (const field of ['videoKey','layoutVideoKey','storyVideoKey']) test(`booth $
 test('fresh signing, normal media, public URLs/proxy and cold replay retain exact identity and bytes', async () => {
   const store = storage(); let relay = makeQrRelay(store, opts);
   for (const [kind,contentType] of [['photo','video/mp4'],['layout','image/png'],['story','image/jpeg']]) assert.equal((await relay.sign({kind,contentType})).status,400);
+  for (const kind of ['constructor','__proto__','toString','../../private']) assert.equal((await relay.sign({kind,contentType:'video/mp4'})).status,400);
   const signed = await relay.sign({kind:'photo', contentType:'image/jpeg'}); assert.equal(signed.status,200);
   const {token,key:photoKey} = signed.body; store.objects.set(photoKey,Buffer.alloc(32,7));
   const body = {token,photoKey};
@@ -153,4 +154,13 @@ for(const approved of [true,false])test(`process replacement preserves ${approve
     assert.equal(await readFile(file,'utf8'),before);await stop();
     const records=new Map(JSON.parse(before));records.delete(APPROVAL);await writeFile(file,JSON.stringify([...records]));base=await start();assert.equal((await fetch(base+'/download/'+TOKEN)).status,404);
   }finally{if(child?.exitCode===null){const done=once(child,'exit');child.kill('SIGTERM');await done;}await rm(dir,{recursive:true,force:true});}
+});
+
+// Authorization is intentionally reread so warm caches cannot outlive revocation.
+test('legacy approval operation counts include live revocation checks',async()=>{
+  const store=seed(),relay=makeQrRelay(store,opts),send=store.send.bind(store);let reads=0;
+  store.send=async cmd=>{if(cmd.input.Key===APPROVAL)reads++;return send(cmd);};
+  assert.equal((await relay.download(TOKEN)).status,200);assert.equal(reads,3);
+  reads=0;assert.equal((await relay.download(TOKEN)).status,200);assert.equal(reads,2);
+  console.log(JSON.stringify({scenario:'approved-legacy-download',coldApprovalGets:3,warmApprovalGets:2,reason:'authorize before legacy adoption, after load and before signing; no live latency claim'}));
 });

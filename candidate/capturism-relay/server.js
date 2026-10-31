@@ -1082,7 +1082,7 @@ function handleSignUpload(req, res) {
     // Whitelist, never interpolate caller input into a key: `kind` and
     // `token` both land in an R2 path.
     const KINDS = { photo: 1, video: 1, layout: 1, story: 1 };
-    if (kind && !KINDS[kind]) {
+    if (kind && !Object.hasOwn(KINDS, kind)) {
       return jsonResponse(res, 400, { error: "Unsupported kind" });
     }
     const fresh = data.token == null;
