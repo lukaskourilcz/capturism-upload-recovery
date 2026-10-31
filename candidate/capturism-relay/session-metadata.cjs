@@ -42,7 +42,8 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
     } catch (err) { if (missing(err)) return null; throw err; }
   }
   const read = token => readObject(keyFor(token), validate);
-  const authorize = (token, data) => mediaScope.authorize(token, data, async key => (await readObject(key, () => {}))?.data);
+  const readApproval = async key => (await readObject(key, () => {}))?.data;
+  const authorize = (token, data) => mediaScope.authorize(token, data, readApproval);
   const ensureAuthorized = async (token, data) => {
     keyFor(token); validate(data);
     if (data.expiresAt <= now()) throw failure(410, 'Download session expired');
@@ -148,20 +149,24 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         if (!patchOnly && identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
         if (!old && patchOnly) throw failure(503, 'Download metadata missing');
         if (old && !patchOnly && (old.photoKey !== input.photoKey || old.boothId !== input.boothId)) throw failure(409, 'Download identity conflict');
+        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt: proof.createdAt, expiresAt: proof.expiresAt };
+        if (!old) {
+          // Reconstruct only from independently approved, exact assets bound
+          // to this original identity/lifetime. Approval cannot issue a clock.
+          const approved = await mediaScope.legacyAssets(token, next, readApproval, { optional: true });
+          for (const field of MEDIA) if (approved[field]) next[field] = approved[field];
+        }
         for (const field of MEDIA) {
-          if (input[field] && old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
+          if (!input[field]) continue;
+          if (next[field] && next[field] !== input[field]) throw failure(409, 'Download media conflict');
+          next[field] = input[field];
         }
         const savedClock = await videoClock(token, proof);
         const videoWaitStartedAt = savedClock ?? old?.videoWaitStartedAt ?? old?.createdAt ?? now();
         if (old?.videoWaitStartedAt !== undefined && old.videoWaitStartedAt !== videoWaitStartedAt) throw failure(503, 'Video wait clock conflict');
         if (videoWaitStartedAt >= proof.expiresAt) { cache.delete(token); throw failure(410, 'Download session expired'); }
         live(token, proof);
-        const createdAt = proof.createdAt;
-        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt, videoWaitStartedAt };
-        for (const field of MEDIA) {
-          if (input[field] == null || input[field] === '') continue;
-          next[field] = input[field];
-        }
+        if (!old) next.videoWaitStartedAt = videoWaitStartedAt;
         // Omitted fields and photo-only replays cannot erase completed videos
         // or restart the original waiting/retention clocks.
         if (input.videosPending === true) next.videosPending = true;
@@ -181,6 +186,9 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         // the timestamp in that commit. The independent record survives cleanup.
         if (savedClock === null) await videoClock(token, proof, videoWaitStartedAt);
         live(token, proof);
+        // A slow save may overlap approval revocation. Public reads also
+        // recheck scope; do not acknowledge/promote a now-denied mapping.
+        await ensureAuthorized(token, next);
         const committed = { ...next, videoWaitStartedAt };
         cache.set(token, committed);
         return committed;

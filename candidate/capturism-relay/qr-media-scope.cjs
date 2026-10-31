@@ -39,6 +39,16 @@ function buildLegacyApproval(token, session) {
   if (!assets.photoKey) throw denied();
   return { version: 1, tokenHash: hash(token), identityHash: identity(session), createdAt: session.createdAt, expiresAt: session.expiresAt, assets };
 }
+async function legacyAssets(token, session, readApproval, { optional = false } = {}) {
+  const key = approvalKey(token);
+  let approval;
+  try { approval = await readApproval(key); }
+  catch { throw Object.assign(new Error('Media authorization temporarily unavailable'), { mediaAuthorization: true, status: 503 }); }
+  // Only a confirmed missing object is optional, never an unreadable approval.
+  if (approval === undefined && optional) return {};
+  validateApproval(token, session, approval);
+  return { ...approval.assets };
+}
 async function authorize(token, session, readApproval) {
   approvalKey(token);
   const legacy = [];
@@ -49,10 +59,7 @@ async function authorize(token, session, readApproval) {
     if (!canonical(token, field, key)) legacy.push(field);
   }
   if (!legacy.length) return;
-  let approval;
-  try { approval = await readApproval(approvalKey(token)); }
-  catch { throw Object.assign(new Error('Media authorization temporarily unavailable'), { mediaAuthorization: true, status: 503 }); }
-  validateApproval(token, session, approval);
-  for (const field of legacy) if (approval.assets[field] !== session[field]) throw denied();
+  const assets = await legacyAssets(token, session, readApproval);
+  for (const field of legacy) if (assets[field] !== session[field]) throw denied();
 }
-module.exports = { FIELDS, approvalKey, canonical, assertAsset, authorize, buildLegacyApproval };
+module.exports = { FIELDS, approvalKey, canonical, assertAsset, authorize, legacyAssets, buildLegacyApproval };

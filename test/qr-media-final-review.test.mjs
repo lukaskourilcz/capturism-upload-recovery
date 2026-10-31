@@ -59,7 +59,7 @@ test('simultaneous restored legacy replays merge approved variants once without 
  const photo={token:TOKEN,photoKey:original.photoKey};
  const [a,b]=await Promise.all([makeQrRelay(store,opts).confirm({...photo,layoutVideoKey:original.layoutVideoKey}),makeQrRelay(store,opts).confirm({...photo,storyVideoKey:original.storyVideoKey})]);
  assert.deepEqual([a.status,b.status],[200,200]);const record=JSON.parse(store.objects.get(META));
- assert.equal(record.layoutVideoKey,original.layoutVideoKey);assert.equal(record.storyVideoKey,original.storyVideoKey);assert.equal(store.writes-writes,2);
+ assert.equal(record.layoutVideoKey,original.layoutVideoKey);assert.equal(record.storyVideoKey,original.storyVideoKey);assert.equal(store.writes-writes,1);assert.equal(record.videoKey,original.videoKey);
  assert.equal(record.createdAt,original.createdAt);assert.equal(record.expiresAt,original.expiresAt);assert.equal(record.videoWaitStartedAt,original.createdAt);assert.deepEqual(retained(store),snapshot);
 });
 
