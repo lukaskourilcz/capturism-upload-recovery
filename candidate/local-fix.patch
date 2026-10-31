@@ -2324,7 +2324,7 @@
    if (!session) {
      return jsonResponse(res, 404, { error: "Not found or expired" });
    }
-@@ -921,6 +973,7 @@
+@@ -921,10 +973,16 @@
    }
  
    try {
@@ -2332,7 +2332,16 @@
      const r = await r2Client.send(new GetObjectCommand({
        Bucket: R2_BUCKET,
        Key: key,
-@@ -945,7 +998,9 @@
+     }));
++
++    if (session.expiresAt <= Date.now()) {
++      r.Body?.destroy?.();
++      return jsonResponse(res, 404, { error: "Not found or expired" });
++    }
+ 
+     // Forward content-type so the browser knows what kind of file it's
+     // receiving. Default to a sensible MIME if R2 didn't return one.
+@@ -945,7 +1003,9 @@
        try { res.destroy(); } catch {}
      });
    } catch (err) {
@@ -2343,7 +2352,7 @@
      if (!res.headersSent) {
        jsonResponse(res, 500, { error: "Could not fetch asset" });
      }
-@@ -1002,6 +1057,7 @@
+@@ -1002,6 +1062,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2351,7 +2360,7 @@
      const contentType = data.contentType;
      if (!contentType || !ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
        return jsonResponse(res, 400, { error: "Unsupported contentType" });
-@@ -1026,9 +1082,10 @@
+@@ -1026,9 +1087,10 @@
      // Whitelist, never interpolate caller input into a key: `kind` and
      // `token` both land in an R2 path.
      const KINDS = { photo: 1, video: 1, layout: 1, story: 1 };
@@ -2363,7 +2372,7 @@
      let token = data.token;
      if (token != null) {
        if (typeof token !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(token)) {
-@@ -1040,8 +1097,18 @@
+@@ -1040,8 +1102,18 @@
      }
      const assetKind = kind || (contentType.startsWith("video/") ? "video" : "photo");
      const key = `sessions/${token}/${assetKind}.${ext}`;
@@ -2382,7 +2391,7 @@
        const cmd = new PutObjectCommand({
          Bucket: R2_BUCKET,
          Key: key,
-@@ -1052,7 +1119,7 @@
+@@ -1052,7 +1124,7 @@
        jsonResponse(res, 200, { token, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
      } catch (err) {
        console.error(`[BOOTH] sign-upload failed for ${boothId}:`, err.message);
@@ -2391,7 +2400,7 @@
      }
    });
  }
-@@ -1077,19 +1144,22 @@
+@@ -1077,19 +1149,22 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2422,7 +2431,7 @@
      console.log(`[BOOTH] Stored session ${token} from ${boothId} (HTTP, videos: ${[videoKey, layoutVideoKey, storyVideoKey].filter(Boolean).length})`);
  
      broadcastToAdmins({
-@@ -1097,10 +1167,10 @@
+@@ -1097,10 +1172,10 @@
        boothId,
        payload: {
          token,
@@ -2437,7 +2446,7 @@
        },
        timestamp: new Date().toISOString(),
      });
-@@ -1129,6 +1199,7 @@
+@@ -1129,6 +1204,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2445,7 +2454,7 @@
      if (data.key !== DEV_SEED_KEY) {
        return jsonResponse(res, 401, { error: "Invalid seed key" });
      }
-@@ -1136,11 +1207,11 @@
+@@ -1136,11 +1212,11 @@
        return jsonResponse(res, 400, { error: "token and photoKey required" });
      }
  
@@ -2462,7 +2471,7 @@
      console.log(`[DEV] Seeded session ${data.token} → ${data.photoKey}`);
  
      jsonResponse(res, 200, {
-@@ -1186,7 +1257,9 @@
+@@ -1186,7 +1262,9 @@
      // as "unknown booth" so we never lose customer data.
      let boothId = "unknown";
      if (token) {
@@ -2473,7 +2482,7 @@
        if (session && session.boothId) boothId = session.boothId;
      }
      const city = BOOTH_CITIES.get(boothId) || boothId;
-@@ -1463,13 +1536,11 @@
+@@ -1463,13 +1541,11 @@
          console.warn(`[BOOTH] photos_ready missing token/photoKey from ${boothId}`);
          return;
        }
@@ -2492,7 +2501,7 @@
        return;
      }
  
-@@ -1710,78 +1781,14 @@
+@@ -1710,78 +1786,14 @@
  // Helpers
  // ---------------------------------------------------------------------------
  
@@ -2578,7 +2587,7 @@
  }
  
  /**
-@@ -2129,6 +2136,8 @@
+@@ -2129,6 +2141,8 @@
  // Start
  // ---------------------------------------------------------------------------
  
@@ -2589,7 +2598,7 @@
    console.log(`[RELAY] Registered booths: ${[...BOOTH_API_KEYS.keys()].join(", ") || "none"}`);
 --- /dev/null
 +++ b/capturism-relay/session-metadata.cjs
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,213 @@
 +'use strict';
 +const { createHash } = require('node:crypto');
 +const mediaScope = require('./qr-media-scope.cjs');
@@ -2639,6 +2648,7 @@
 +    keyFor(token); validate(data);
 +    if (data.expiresAt <= now()) throw failure(410, 'Download session expired');
 +    await authorize(token, data);
++    if (data.expiresAt <= now()) throw failure(410, 'Download session expired');
 +  };
 +  const hash = value => createHash('sha256').update(value).digest('hex');
 +  const identity = data => hash(JSON.stringify([data.boothId, data.photoKey]));

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import mediaScope from '../candidate/capturism-relay/qr-media-scope.cjs';
 import { storage, storageCommands } from './helpers/relay-fixture.mjs';
 import { approveLegacy, makeQrRelay, TOKEN, PHOTO, BODY } from './helpers/qr-relay-fixture.mjs';
 const KEY = `sessions/${TOKEN}/meta.json`;
@@ -66,7 +67,7 @@ test('backup review: actual pool snapshot omits QR proof but its pruner preserve
   class ListObjectsV2Command { constructor(input) { this.input = input; } }
   class CopyObjectCommand { constructor(input) { this.input = input; } }
   class DeleteObjectCommand { constructor(input) { this.input = input; } }
-  const objects = new Map([[PROOF, 'proof'], [WAIT, 'clock'], ['pool/example.json', 'pool'], ['pool-portraits/example.jpg','photo'], ['pool-deletions/example.json','fence'], ['backups/pool/2000-01-01/qr-expiry/v1/old.json','old snapshot']]);
+  const objects = new Map([[PROOF, 'proof'], [WAIT, 'clock'], [mediaScope.approvalKey(TOKEN), 'reviewed approval'], ['pool/example.json', 'pool'], ['pool-portraits/example.jpg','photo'], ['pool-deletions/example.json','fence'], ['backups/pool/2000-01-01/qr-expiry/v1/old.json','old snapshot']]);
   const requests = [], module = { exports: {} };
   const client = { async send(command) {
     const input = command.input; requests.push({ operation: command.constructor.name, ...input });
@@ -81,8 +82,8 @@ test('backup review: actual pool snapshot omits QR proof but its pruner preserve
     require: name => { assert.equal(name, '@aws-sdk/client-s3'); return { ...storageCommands, ListObjectsV2Command, CopyObjectCommand, DeleteObjectCommand }; },
   });
   module.exports.configureForReview(client, 'isolated'); await module.exports.runBackup();
-  assert.equal(objects.get(PROOF), 'proof'); assert.equal(objects.get(WAIT), 'clock');
-  assert.equal(requests.some(r => r.operation === 'CopyObjectCommand' && /qr-(expiry|video-wait)\//.test(decodeURIComponent(r.CopySource))), false);
+  assert.equal(objects.get(PROOF), 'proof'); assert.equal(objects.get(WAIT), 'clock'); assert.equal(objects.get(mediaScope.approvalKey(TOKEN)), 'reviewed approval');
+  assert.equal(requests.some(r => r.operation === 'CopyObjectCommand' && /qr-(expiry|video-wait|media-authorizations)\//.test(decodeURIComponent(r.CopySource))), false);
   assert.equal(objects.has('backups/pool/2000-01-01/qr-expiry/v1/old.json'), false);
   assert.equal(requests.filter(r => r.operation === 'DeleteObjectCommand').every(r => r.Key.startsWith('backups/pool/')), true);
   assert.equal(requests.filter(r => r.operation === 'CopyObjectCommand').length, 3);

@@ -164,3 +164,15 @@ test('legacy approval operation counts include live revocation checks',async()=>
   reads=0;assert.equal((await relay.download(TOKEN)).status,200);assert.equal(reads,2);
   console.log(JSON.stringify({scenario:'approved-legacy-download',coldApprovalGets:3,warmApprovalGets:2,reason:'authorize before legacy adoption, after load and before signing; no live latency claim'}));
 });
+
+test('slow approval or asset read crossing original expiry never begins a public stream',async()=>{
+  for(const boundary of ['approval','asset']) {
+    const store=seed();let clock=NOW,calls=0,targetReads=0;const relay=makeQrRelay(store,{now:()=>clock});await relay.download(TOKEN);
+    store.beforeGet=async({Key})=>{
+      if(Key===APPROVAL && ++calls===2 && boundary==='approval')clock=legacy.expiresAt;
+      if(Key===legacy.photoKey){targetReads++;if(boundary==='asset')clock=legacy.expiresAt;}
+    };
+    const snapshot=new Map(store.objects),r=await proxy(relay);assert.equal(r.status,404);
+    assert.equal(targetReads,boundary==='approval'?0:1);assert.deepEqual(store.objects,snapshot);
+  }
+});

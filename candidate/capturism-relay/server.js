@@ -979,6 +979,11 @@ async function handleProxyAsset(req, res, token, kind) {
       Key: key,
     }));
 
+    if (session.expiresAt <= Date.now()) {
+      r.Body?.destroy?.();
+      return jsonResponse(res, 404, { error: "Not found or expired" });
+    }
+
     // Forward content-type so the browser knows what kind of file it's
     // receiving. Default to a sensible MIME if R2 didn't return one.
     const isVideoKind = kind !== "photo";

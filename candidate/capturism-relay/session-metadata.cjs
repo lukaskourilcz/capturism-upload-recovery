@@ -47,6 +47,7 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
     keyFor(token); validate(data);
     if (data.expiresAt <= now()) throw failure(410, 'Download session expired');
     await authorize(token, data);
+    if (data.expiresAt <= now()) throw failure(410, 'Download session expired');
   };
   const hash = value => createHash('sha256').update(value).digest('hex');
   const identity = data => hash(JSON.stringify([data.boothId, data.photoKey]));
