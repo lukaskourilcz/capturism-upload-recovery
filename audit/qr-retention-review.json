@@ -1,0 +1,76 @@
+{
+  "reviewDate": "2026-10-31",
+  "reviewedSnapshot": "0394f44",
+  "productionImplementation": "485d20a47435462a0ddc566b88cfb6be2c78d3f2",
+  "patchSHA256": "3c54fdc8c290fdd8a8666dd205d5d9e73aaab8e7bb0b48c62ddab98d09f345fd",
+  "matchedCandidateFiles": 23,
+  "productionSourceChanged": false,
+  "twinTestsPassed": 132,
+  "targetedKioskTestsPassed": 27,
+  "positivePhoneTestsPassed": 7,
+  "phoneUnsafeReproductionCases": 2,
+  "unsafeReproductionsAreNotSafetyTests": true,
+  "kioskTypecheckFullLintBuild": "passed",
+  "phoneTypecheckBuildComponentLint": "passed",
+  "twinBuild": "passed",
+  "artifactApplyAndSyntax": "passed",
+  "legacyRecovery": [
+    "failed adoption save returns 503 without metadata/cache mutation; cold retry recovers original clocks",
+    "lost proof acknowledgement reconciles after restart without a second write",
+    "two cold relays conditionally create one proof and preserve video/history",
+    "noncanonical legacy photo key permits video signing/replay; changed photo identity stays rejected",
+    "proof read failure is not interpreted as missing proof"
+  ],
+  "retention": {
+    "liveProofExcludedFromPoolPruner": true,
+    "builtInPoolBackupIncludesQrProof": false,
+    "realLifecycleAndExternalBackupsVerified": false,
+    "required": "separate verified expiry-proof backup/restore process; never use the pool marker as evidence"
+  },
+  "openFindings": [
+    {
+      "id": "R6",
+      "severity": "medium",
+      "file": "candidate/capturism-download/src/components/DownloadPage.tsx",
+      "line": 97,
+      "trigger": "fetch or response.json never settles",
+      "reproduction": "after 720000ms virtual time still Loading, no retry control, signal not aborted",
+      "required": "bounded whole-read deadline covering fetch and body; explicit retry; late-result/unmount guards"
+    },
+    {
+      "id": "R7",
+      "severity": "medium",
+      "file": "candidate/capturism-relay/server.js",
+      "line": 879,
+      "trigger": "9-minute initial photo upload/confirmation; inspect 2 minutes after photo confirmation",
+      "baseline": {
+        "videoPending": true,
+        "videoFailed": false
+      },
+      "candidate": {
+        "videoPending": false,
+        "videoFailed": true
+      },
+      "required": "durable first-photo-confirmation video-wait timestamp independent of immutable issuance/expiry; no renewal on replay"
+    }
+  ],
+  "environmentGatesRemain": [
+    "Windows/kiosk/launcher and hardware",
+    "real R2 SDK/permissions/retention/current backup and legacy adoption",
+    "Render limits/topology",
+    "Pages target/relay URL/compatible retry bundle",
+    "dependency disposition",
+    "retire legacy writers and outstanding capabilities"
+  ],
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "evidence": [
+    "test-results/qr-retention-full-tests.txt",
+    "test-results/qr-retention-focused.txt",
+    "test-results/qr-retention-kiosk-tests.txt",
+    "test-results/qr-retention-phone-tests.txt",
+    "test-results/qr-retention-video-grace.json",
+    "test-results/qr-retention-artifact.json"
+  ]
+}
