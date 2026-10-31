@@ -40,7 +40,7 @@ test('real QR client retains its checkpoint until actual relay metadata is durab
   const photo = new Blob([new Uint8Array(16384)], { type: 'image/jpeg' });
   try {
     for (const scenario of ['save-failure', 'lost-storage-ack', 'deadline-then-manual-recovery']) await t.test(scenario, async () => {
-      store = storage(); relay = makeQrRelay(store); counts = { sign: 0, put: 0, confirm: 0 }; statuses = [];
+      store = storage(); relay = makeQrRelay(store); counts = { sign: 0, put: 0, confirm: 0 }; statuses = []; await relay.issue();
       const metadataKey = `sessions/${TOKEN}/meta.json`;
       if (scenario === 'save-failure') store.failWrites = 1;
       if (scenario === 'lost-storage-ack') {
@@ -55,7 +55,7 @@ test('real QR client retains its checkpoint until actual relay metadata is durab
         store.failWrites = 0; assert.equal(await client.retryQrUpload(), TOKEN);
       } else assert.equal(await client.uploadSessionToCloud({ photo, retryForMs: 5000 }), TOKEN);
       assert.deepEqual(statuses, [503,200]); assert.equal(counts.sign, 1); assert.equal(counts.put, 1); assert.equal(counts.confirm, 2);
-      assert.equal(store.writes, 1); assert.equal(relay.notifications.length, 1);
+      assert.equal(store.writes, 2); assert.equal(relay.notifications.length, 1);
       const originalMetadata = store.objects.get(metadataKey), originalPhoto = store.objects.get(PHOTO);
       relay = makeQrRelay(store); // Relay loses all cache, provider state remains.
       const download = await nativeFetch(base + '/download/' + TOKEN); assert.equal(download.status, 200); await download.text();

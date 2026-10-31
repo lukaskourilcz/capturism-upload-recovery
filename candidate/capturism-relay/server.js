@@ -803,7 +803,13 @@ async function probeForVideos(token, session) {
 }
 
 async function handleGetDownload(req, res, token) {
-  let session = await loadSession(token);
+  let session;
+  try { session = await loadSession(token); }
+  catch (err) {
+    if (err.status === 400) return jsonResponse(res, 404, { error: "Not found or expired" });
+    console.error("[DOWNLOAD] Session metadata temporarily unavailable");
+    return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
+  }
   if (!session) {
     return jsonResponse(res, 404, { error: "Not found or expired" });
   }
@@ -899,7 +905,13 @@ async function handleGetDownload(req, res, token) {
  * possession of the token = right to read the file.
  */
 async function handleProxyAsset(req, res, token, kind) {
-  const session = await loadSession(token);
+  let session;
+  try { session = await loadSession(token); }
+  catch (err) {
+    if (err.status === 400) return jsonResponse(res, 404, { error: "Not found or expired" });
+    console.error("[DOWNLOAD] Session metadata temporarily unavailable");
+    return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
+  }
   if (!session) {
     return jsonResponse(res, 404, { error: "Not found or expired" });
   }
@@ -1000,6 +1012,7 @@ function handleSignUpload(req, res) {
       return jsonResponse(res, 400, { error: "Invalid JSON" });
     }
 
+    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected object" });
     const contentType = data.contentType;
     if (!contentType || !ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
       return jsonResponse(res, 400, { error: "Unsupported contentType" });
@@ -1027,6 +1040,7 @@ function handleSignUpload(req, res) {
     if (kind && !KINDS[kind]) {
       return jsonResponse(res, 400, { error: "Unsupported kind" });
     }
+    const fresh = data.token == null;
     let token = data.token;
     if (token != null) {
       if (typeof token !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(token)) {
@@ -1040,6 +1054,15 @@ function handleSignUpload(req, res) {
     const key = `sessions/${token}/${assetKind}.${ext}`;
 
     try {
+      // Persist expiry BEFORE granting an upload capability. Re-signing videos
+      // and retrying old tokens must prove their original photo identity.
+      // Video keys do not identify the photo; look it up in durable metadata
+      // when an older client omits photoKey on its video-signing request.
+      let photoKey = assetKind === "photo" ? key : data.photoKey;
+      if (!photoKey && !fresh) photoKey = (await sessionMetadata.load(token))?.photoKey;
+      if (fresh && assetKind !== "photo") return jsonResponse(res, 400, { error: "Photo upload must start the session" });
+      if (!photoKey && !fresh) return jsonResponse(res, 410, { error: "Download session expired or unavailable" });
+      await sessionMetadata.issue(token, { boothId, photoKey }, { fresh });
       const cmd = new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: key,
@@ -1050,7 +1073,7 @@ function handleSignUpload(req, res) {
       jsonResponse(res, 200, { token, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
     } catch (err) {
       console.error(`[BOOTH] sign-upload failed for ${boothId}:`, err.message);
-      jsonResponse(res, 500, { error: "Failed to sign upload URL" });
+      jsonResponse(res, [400, 409, 410].includes(err.status) ? err.status : 503, { error: "Could not prepare upload. Please try again." });
     }
   });
 }
@@ -1188,7 +1211,9 @@ function handleSubscribe(req, res) {
     // as "unknown booth" so we never lose customer data.
     let boothId = "unknown";
     if (token) {
-      const session = await loadSession(token);
+      let session;
+      try { session = await loadSession(token); }
+      catch { return jsonResponse(res, 503, { error: "Session temporarily unavailable. Please try again.", retryable: true }); }
       if (session && session.boothId) boothId = session.boothId;
     }
     const city = BOOTH_CITIES.get(boothId) || boothId;
@@ -1717,8 +1742,7 @@ async function storeSession(token, input) {
 
 /** Load only committed metadata; failed writes never populate this cache. */
 async function loadSession(token) {
-  try { return await sessionMetadata.load(token); }
-  catch { console.error("[SESSION] durable metadata unavailable"); return null; }
+  return sessionMetadata.load(token);
 }
 
 /**

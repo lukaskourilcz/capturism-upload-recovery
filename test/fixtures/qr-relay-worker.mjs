@@ -5,14 +5,15 @@ import { storage } from '../helpers/relay-fixture.mjs';
 import { makeQrRelay, PHOTO } from '../helpers/qr-relay-fixture.mjs';
 import queue from '../../candidate/pool-queue.cjs';
 const providerFile = process.argv[2], store = storage();
-if (fs.existsSync(providerFile)) {
+const fresh = !fs.existsSync(providerFile);
+if (!fresh) {
   for (const [key, bytes] of JSON.parse(fs.readFileSync(providerFile, 'utf8'))) store.objects.set(key, Buffer.from(bytes, 'base64'));
 } else {
   // Seed only a fresh provider. A restart must not manufacture a lost photo.
   store.objects.set(PHOTO, Buffer.alloc(32, 7));
   queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
 }
-store.failWrites = process.argv[3] === 'fail' ? 1 : 0;
+
 const original = store.send.bind(store);
 store.send = async command => {
   const result = await original(command);
@@ -20,7 +21,9 @@ store.send = async command => {
   return result;
 };
 let base;
-const relay = makeQrRelay(store, { signR2Url: async key => base + '/object?key=' + encodeURIComponent(key) });
+const relay = makeQrRelay(store, { now: () => process.argv[4] ? Number(process.argv[4]) : Date.now(), signR2Url: async key => base + '/object?key=' + encodeURIComponent(key) });
+if (fresh) await relay.issue();
+store.failWrites = process.argv[3] === 'fail' ? 1 : 0;
 const server = http.createServer((req, res) => {
   if (req.url === '/confirm') return relay.handlePhotosReady(req, res);
   if (req.url.startsWith('/download/')) return void relay.handleGetDownload(req, res, req.url.split('/')[2]);

@@ -101,8 +101,8 @@ export class Simulator {
     this.run = { id, dir, scenario, cfg, started: Date.now(), coldUntil: Date.now() + cfg.cold * 1000, sessions: {}, pool: {}, faults: new Set(), objects: {}, signed: new Map(), commitFailures: cfg.commitFailures };
     const run = this.run;
     run.qrStorage = localPoolStorage(join(dir, 'qr-metadata'), {
-      beforePut: async () => {
-        if (run.scenario === 'qr_idle_save' && !run.faults.has('qr.metadata')) {
+      beforePut: async ({ Key }) => {
+        if (Key.endsWith('/meta.json') && run.scenario === 'qr_idle_save' && !run.faults.has('qr.metadata')) {
           run.faults.add('qr.metadata'); this.event('idle-fault', 'Injected QR metadata write failure'); throw new Error('QR metadata storage failure');
         }
       },
@@ -287,6 +287,11 @@ export class Simulator {
       const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'video/mp4': 'mp4', 'video/webm': 'webm' }[b.contentType];
       if (!ext) return json(res, 415, { error: 'Unsupported media' });
       const key = `sessions/${token}/${b.kind}.${ext}`;
+      try {
+        const photoKey = b.kind === 'photo' ? key : (await run.qrMetadata.load(token))?.photoKey;
+        if (!b.token && b.kind !== 'photo') return json(res, 400, { error: 'Photo must start the session' });
+        await run.qrMetadata.issue(token, { boothId: 'local-twin', photoKey }, { fresh: !b.token });
+      } catch (error) { return json(res, error.status || 503, { error: 'Could not prepare upload' }); }
       const sig = randomBytes(12).toString('hex'); run.signed.set(sig, { key, contentType: b.contentType, expires: Date.now() + 600000 });
       this.event('sign', `${b.kind}: upload URL issued`, { token, key });
       return json(res, 200, { token, key, uploadUrl: `${this.baseUrl}/storage/${sig}`, expiresIn: 600 });
@@ -333,7 +338,9 @@ export class Simulator {
       return json(res, 200, { ok: true, downloadUrl: `${this.baseUrl}/d/${b.token}` });
     }
     if (p.startsWith('/api/download/')) {
-      const token = p.split('/')[3], session = await run.qrMetadata.load(token).catch(() => null);
+      const token = p.split('/')[3]; let session;
+      try { session = await run.qrMetadata.load(token); }
+      catch { return json(res, 503, { error: 'Photos temporarily unavailable. Please try again.', retryable: true }); }
       if (session) run.sessions[token] = session;
       return json(res, session ? 200 : 404, session || { error: 'Session not confirmed' });
     }

@@ -1,4 +1,5 @@
 'use strict';
+const { createHash } = require('node:crypto');
 
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const missing = err => err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404;
@@ -23,8 +24,7 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt) || data.expiresAt <= data.createdAt ||
         MEDIA.some(field => data[field] !== undefined && !validKey(data[field]))) throw failure(503, 'Invalid stored download metadata');
   }
-  async function read(token) {
-    const key = keyFor(token);
+  async function readObject(key, validator) {
     if (!client || !bucket) throw failure(503, 'Download storage unavailable');
     try {
       const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -35,9 +35,59 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         if (size > 64 * 1024) throw failure(503, 'Stored download metadata exceeds limit');
         chunks.push(bytes);
       }
-      const data = JSON.parse(Buffer.concat(chunks).toString('utf8')); validate(data);
+      const data = JSON.parse(Buffer.concat(chunks).toString('utf8')); validator(data);
       return { data, etag: response.ETag };
     } catch (err) { if (missing(err)) return null; throw err; }
+  }
+  const read = token => readObject(keyFor(token), validate);
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const identity = data => hash(JSON.stringify([data.boothId, data.photoKey]));
+  const expiryKey = token => { keyFor(token); return `qr-expiry/v1/${hash(token)}.json`; };
+  function validateExpiry(data) {
+    if (!data || data.version !== 1 || !/^[a-f0-9]{64}$/.test(data.identityHash) ||
+        !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt) ||
+        data.expiresAt <= data.createdAt || data.expiresAt - data.createdAt > ttlMs) throw failure(503, 'Invalid download expiry record');
+  }
+  async function authority(token, stored, fresh) {
+    // This immutable, minimal record must be excluded from sessions/ cleanup.
+    // Only a server-minted token may establish a new clock. A caller-supplied
+    // token without either proof or legacy durable metadata is never reissued.
+    const key = expiryKey(token);
+    let candidate;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const existing = await readObject(key, validateExpiry);
+      if (existing) {
+        const proof = existing.data;
+        if (stored && (identity(stored) !== proof.identityHash || stored.createdAt !== proof.createdAt || stored.expiresAt !== proof.expiresAt)) throw failure(503, 'Download expiry record conflict');
+        return proof;
+      }
+      if (!candidate) {
+        const createdAt = now();
+        const original = stored || (fresh && { ...fresh, createdAt, expiresAt: createdAt + ttlMs });
+        if (!original) return null;
+        candidate = { version: 1, identityHash: identity(original), createdAt: original.createdAt, expiresAt: original.expiresAt };
+        validateExpiry(candidate);
+      }
+      try {
+        await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(candidate), ContentType: 'application/json', IfNoneMatch: '*' }));
+        return candidate;
+      } catch (err) { if (!conflict(err)) throw err; }
+    }
+    throw failure(503, 'Download expiry record contention');
+  }
+  function live(token, proof) {
+    if (!proof || proof.expiresAt <= now()) { cache.delete(token); throw failure(410, 'Download session expired or unissued'); }
+  }
+  async function issue(token, input, { fresh = false } = {}) {
+    keyFor(token);
+    if (!input || !validKey(input.photoKey) || typeof input.boothId !== 'string' || !input.boothId) throw failure(400, 'Invalid photo identity');
+    return exclusive(token, async () => {
+      const old = (await read(token))?.data;
+      const proof = await authority(token, old, fresh ? input : null);
+      live(token, proof);
+      if (identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
+      return proof;
+    });
   }
   async function change(token, input, patchOnly) {
     keyFor(token);
@@ -50,11 +100,13 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
       // that a previous writer saved, or that another relay has not updated it.
       for (let attempt = 0; attempt < 5; attempt++) {
         const stored = await read(token), old = stored?.data;
-        if (old && old.expiresAt <= now()) { cache.delete(token); throw failure(410, 'Download session expired'); }
+        const proof = await authority(token, old);
+        live(token, proof);
+        if (!patchOnly && identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
         if (!old && patchOnly) throw failure(503, 'Download metadata missing');
         if (old && !patchOnly && (old.photoKey !== input.photoKey || old.boothId !== input.boothId)) throw failure(409, 'Download identity conflict');
-        const createdAt = old?.createdAt ?? now();
-        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: createdAt + ttlMs };
+        const createdAt = proof.createdAt;
+        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt };
         for (const field of MEDIA) {
           if (input[field] == null || input[field] === '') continue;
           if (old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
@@ -81,10 +133,13 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
   async function load(token) {
     keyFor(token);
     let data = cache.get(token);
-    if (!data) { const stored = await read(token); data = stored?.data; }
+    if (!data) {
+      const stored = await read(token); data = stored?.data;
+      if (data) { const proof = await authority(token, data); if (!proof || proof.expiresAt <= now()) return null; }
+    }
     if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
     cache.set(token, data); return data;
   }
-  return { save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
+  return { issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
 }
 module.exports = { createSessionMetadataStore };

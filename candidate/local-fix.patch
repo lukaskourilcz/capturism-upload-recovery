@@ -1207,6 +1207,106 @@
      set(initialState)
    },
  }), {
+--- a/capturism-download/src/components/DownloadPage.tsx
++++ b/capturism-download/src/components/DownloadPage.tsx
+@@ -39,23 +39,15 @@
+ }
+ 
+ export function DownloadPage() {
++  const [token] = useState(getTokenFromPath)
+   const [session, setSession] = useState<SessionData>({})
+-  const [state, setState] = useState<LoadState>('idle')
+-  const [errorMessage, setErrorMessage] = useState<string>('')
++  const [state, setState] = useState<LoadState>(() => !token ? 'idle' : RELAY_URL ? 'loading' : 'error')
++  const [errorMessage, setErrorMessage] = useState<string>(() => token && !RELAY_URL ? 'Server not configured' : '')
++  const [retryable, setRetryable] = useState(false)
++  const [attempt, setAttempt] = useState(0)
+ 
+   useEffect(() => {
+-    const token = getTokenFromPath()
+-    if (!token) {
+-      setState('idle')
+-      return
+-    }
+-    if (!RELAY_URL) {
+-      setState('error')
+-      setErrorMessage('Server not configured')
+-      return
+-    }
+-
+-    setState('loading')
++    if (!token || !RELAY_URL) return
+     const controller = new AbortController()
+ 
+     // ── Wait for the video ──────────────────────────────────────────
+@@ -106,8 +98,8 @@
+       signal: controller.signal,
+     })
+       .then(async (res) => {
+-        if (res.status === 404) {
+-          throw new Error('This link has expired or is invalid.')
++        if (res.status === 404 || res.status === 410) {
++          throw Object.assign(new Error('This link has expired or is invalid.'), { terminal: true })
+         }
+         if (!res.ok) {
+           throw new Error('Could not load your photos. Please try again.')
+@@ -124,6 +116,7 @@
+         videoPending?: boolean
+         date: string
+       }) => {
++        if (controller.signal.aborted) return
+         setSession({
+           photoUrl: data.photoUrl,
+           videoUrl: data.videoUrl ?? undefined,
+@@ -149,7 +142,8 @@
+         }
+       })
+       .catch((err) => {
+-        if (err.name === 'AbortError') return
++        if (controller.signal.aborted) return
++        setRetryable(err.terminal !== true)
+         setState('error')
+         setErrorMessage(err.message || 'Something went wrong.')
+       })
+@@ -160,7 +154,7 @@
+       controller.abort()
+       if (pollTimer) window.clearTimeout(pollTimer)
+     }
+-  }, [])
++  }, [attempt, token])
+ 
+   const formattedDate = session.date
+     ? new Date(session.date).toLocaleDateString('en-GB', {
+@@ -224,14 +218,27 @@
+         )}
+ 
+         {state === 'error' && (
+-          <div style={{
++          <div role="alert" style={{
+             textAlign: 'center',
+             padding: '12px 24px 0',
+             fontSize: '13px',
+             color: 'rgba(255,180,180,0.7)',
+             fontWeight: 300,
+           }}>
+-            {errorMessage}
++            <p>{errorMessage}</p>
++            {retryable && (
++              <button type="button" onClick={() => {
++                setState('loading')
++                setRetryable(false)
++                setAttempt(value => value + 1)
++              }} style={{
++                marginTop: '8px', padding: '10px 24px', borderRadius: '24px',
++                border: '1px solid rgba(255,255,255,0.5)', background: 'transparent',
++                color: '#FFFFFF', font: 'inherit', cursor: 'pointer',
++              }}>
++                Try again
++              </button>
++            )}
+           </div>
+         )}
+ 
 --- /dev/null
 +++ b/capturism-relay/pool-publication.cjs
 @@ -0,0 +1,152 @@
@@ -1882,7 +1982,7 @@
  }
  
  /**
-@@ -801,7 +799,7 @@
+@@ -801,11 +799,17 @@
    }));
    if (Object.keys(found).length === 0) return session;
    console.log(`[DOWNLOAD] Recovered ${Object.keys(found).length} orphaned video(s) for ${token} by probing R2`);
@@ -1891,7 +1991,74 @@
  }
  
  async function handleGetDownload(req, res, token) {
-@@ -1077,19 +1075,22 @@
+-  let session = await loadSession(token);
++  let session;
++  try { session = await loadSession(token); }
++  catch (err) {
++    if (err.status === 400) return jsonResponse(res, 404, { error: "Not found or expired" });
++    console.error("[DOWNLOAD] Session metadata temporarily unavailable");
++    return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
++  }
+   if (!session) {
+     return jsonResponse(res, 404, { error: "Not found or expired" });
+   }
+@@ -901,7 +905,13 @@
+  * possession of the token = right to read the file.
+  */
+ async function handleProxyAsset(req, res, token, kind) {
+-  const session = await loadSession(token);
++  let session;
++  try { session = await loadSession(token); }
++  catch (err) {
++    if (err.status === 400) return jsonResponse(res, 404, { error: "Not found or expired" });
++    console.error("[DOWNLOAD] Session metadata temporarily unavailable");
++    return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
++  }
+   if (!session) {
+     return jsonResponse(res, 404, { error: "Not found or expired" });
+   }
+@@ -1002,6 +1012,7 @@
+       return jsonResponse(res, 400, { error: "Invalid JSON" });
+     }
+ 
++    if (!data || typeof data !== "object" || Array.isArray(data)) return jsonResponse(res, 400, { error: "Expected object" });
+     const contentType = data.contentType;
+     if (!contentType || !ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
+       return jsonResponse(res, 400, { error: "Unsupported contentType" });
+@@ -1029,6 +1040,7 @@
+     if (kind && !KINDS[kind]) {
+       return jsonResponse(res, 400, { error: "Unsupported kind" });
+     }
++    const fresh = data.token == null;
+     let token = data.token;
+     if (token != null) {
+       if (typeof token !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(token)) {
+@@ -1042,6 +1054,15 @@
+     const key = `sessions/${token}/${assetKind}.${ext}`;
+ 
+     try {
++      // Persist expiry BEFORE granting an upload capability. Re-signing videos
++      // and retrying old tokens must prove their original photo identity.
++      // Video keys do not identify the photo; look it up in durable metadata
++      // when an older client omits photoKey on its video-signing request.
++      let photoKey = assetKind === "photo" ? key : data.photoKey;
++      if (!photoKey && !fresh) photoKey = (await sessionMetadata.load(token))?.photoKey;
++      if (fresh && assetKind !== "photo") return jsonResponse(res, 400, { error: "Photo upload must start the session" });
++      if (!photoKey && !fresh) return jsonResponse(res, 410, { error: "Download session expired or unavailable" });
++      await sessionMetadata.issue(token, { boothId, photoKey }, { fresh });
+       const cmd = new PutObjectCommand({
+         Bucket: R2_BUCKET,
+         Key: key,
+@@ -1052,7 +1073,7 @@
+       jsonResponse(res, 200, { token, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
+     } catch (err) {
+       console.error(`[BOOTH] sign-upload failed for ${boothId}:`, err.message);
+-      jsonResponse(res, 500, { error: "Failed to sign upload URL" });
++      jsonResponse(res, [400, 409, 410].includes(err.status) ? err.status : 503, { error: "Could not prepare upload. Please try again." });
+     }
+   });
+ }
+@@ -1077,19 +1098,22 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -1922,7 +2089,7 @@
      console.log(`[BOOTH] Stored session ${token} from ${boothId} (HTTP, videos: ${[videoKey, layoutVideoKey, storyVideoKey].filter(Boolean).length})`);
  
      broadcastToAdmins({
-@@ -1097,10 +1098,10 @@
+@@ -1097,10 +1121,10 @@
        boothId,
        payload: {
          token,
@@ -1937,7 +2104,7 @@
        },
        timestamp: new Date().toISOString(),
      });
-@@ -1129,6 +1130,7 @@
+@@ -1129,6 +1153,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -1945,7 +2112,7 @@
      if (data.key !== DEV_SEED_KEY) {
        return jsonResponse(res, 401, { error: "Invalid seed key" });
      }
-@@ -1136,11 +1138,11 @@
+@@ -1136,11 +1161,11 @@
        return jsonResponse(res, 400, { error: "token and photoKey required" });
      }
  
@@ -1962,7 +2129,18 @@
      console.log(`[DEV] Seeded session ${data.token} → ${data.photoKey}`);
  
      jsonResponse(res, 200, {
-@@ -1463,13 +1465,11 @@
+@@ -1186,7 +1211,9 @@
+     // as "unknown booth" so we never lose customer data.
+     let boothId = "unknown";
+     if (token) {
+-      const session = await loadSession(token);
++      let session;
++      try { session = await loadSession(token); }
++      catch { return jsonResponse(res, 503, { error: "Session temporarily unavailable. Please try again.", retryable: true }); }
+       if (session && session.boothId) boothId = session.boothId;
+     }
+     const city = BOOTH_CITIES.get(boothId) || boothId;
+@@ -1463,13 +1490,11 @@
          console.warn(`[BOOTH] photos_ready missing token/photoKey from ${boothId}`);
          return;
        }
@@ -1981,7 +2159,7 @@
        return;
      }
  
-@@ -1710,78 +1710,15 @@
+@@ -1710,78 +1735,14 @@
  // Helpers
  // ---------------------------------------------------------------------------
  
@@ -2063,12 +2241,11 @@
 -    return null;
 -  }
 -  return session;
-+  try { return await sessionMetadata.load(token); }
-+  catch { console.error("[SESSION] durable metadata unavailable"); return null; }
++  return sessionMetadata.load(token);
  }
  
  /**
-@@ -2129,6 +2066,8 @@
+@@ -2129,6 +2090,8 @@
  // Start
  // ---------------------------------------------------------------------------
  
@@ -2079,8 +2256,9 @@
    console.log(`[RELAY] Registered booths: ${[...BOOTH_API_KEYS.keys()].join(", ") || "none"}`);
 --- /dev/null
 +++ b/capturism-relay/session-metadata.cjs
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,145 @@
 +'use strict';
++const { createHash } = require('node:crypto');
 +
 +const failure = (status, message) => Object.assign(new Error(message), { status });
 +const missing = err => err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404;
@@ -2105,8 +2283,7 @@
 +        !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt) || data.expiresAt <= data.createdAt ||
 +        MEDIA.some(field => data[field] !== undefined && !validKey(data[field]))) throw failure(503, 'Invalid stored download metadata');
 +  }
-+  async function read(token) {
-+    const key = keyFor(token);
++  async function readObject(key, validator) {
 +    if (!client || !bucket) throw failure(503, 'Download storage unavailable');
 +    try {
 +      const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -2117,9 +2294,59 @@
 +        if (size > 64 * 1024) throw failure(503, 'Stored download metadata exceeds limit');
 +        chunks.push(bytes);
 +      }
-+      const data = JSON.parse(Buffer.concat(chunks).toString('utf8')); validate(data);
++      const data = JSON.parse(Buffer.concat(chunks).toString('utf8')); validator(data);
 +      return { data, etag: response.ETag };
 +    } catch (err) { if (missing(err)) return null; throw err; }
++  }
++  const read = token => readObject(keyFor(token), validate);
++  const hash = value => createHash('sha256').update(value).digest('hex');
++  const identity = data => hash(JSON.stringify([data.boothId, data.photoKey]));
++  const expiryKey = token => { keyFor(token); return `qr-expiry/v1/${hash(token)}.json`; };
++  function validateExpiry(data) {
++    if (!data || data.version !== 1 || !/^[a-f0-9]{64}$/.test(data.identityHash) ||
++        !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt) ||
++        data.expiresAt <= data.createdAt || data.expiresAt - data.createdAt > ttlMs) throw failure(503, 'Invalid download expiry record');
++  }
++  async function authority(token, stored, fresh) {
++    // This immutable, minimal record must be excluded from sessions/ cleanup.
++    // Only a server-minted token may establish a new clock. A caller-supplied
++    // token without either proof or legacy durable metadata is never reissued.
++    const key = expiryKey(token);
++    let candidate;
++    for (let attempt = 0; attempt < 5; attempt++) {
++      const existing = await readObject(key, validateExpiry);
++      if (existing) {
++        const proof = existing.data;
++        if (stored && (identity(stored) !== proof.identityHash || stored.createdAt !== proof.createdAt || stored.expiresAt !== proof.expiresAt)) throw failure(503, 'Download expiry record conflict');
++        return proof;
++      }
++      if (!candidate) {
++        const createdAt = now();
++        const original = stored || (fresh && { ...fresh, createdAt, expiresAt: createdAt + ttlMs });
++        if (!original) return null;
++        candidate = { version: 1, identityHash: identity(original), createdAt: original.createdAt, expiresAt: original.expiresAt };
++        validateExpiry(candidate);
++      }
++      try {
++        await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(candidate), ContentType: 'application/json', IfNoneMatch: '*' }));
++        return candidate;
++      } catch (err) { if (!conflict(err)) throw err; }
++    }
++    throw failure(503, 'Download expiry record contention');
++  }
++  function live(token, proof) {
++    if (!proof || proof.expiresAt <= now()) { cache.delete(token); throw failure(410, 'Download session expired or unissued'); }
++  }
++  async function issue(token, input, { fresh = false } = {}) {
++    keyFor(token);
++    if (!input || !validKey(input.photoKey) || typeof input.boothId !== 'string' || !input.boothId) throw failure(400, 'Invalid photo identity');
++    return exclusive(token, async () => {
++      const old = (await read(token))?.data;
++      const proof = await authority(token, old, fresh ? input : null);
++      live(token, proof);
++      if (identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
++      return proof;
++    });
 +  }
 +  async function change(token, input, patchOnly) {
 +    keyFor(token);
@@ -2132,11 +2359,13 @@
 +      // that a previous writer saved, or that another relay has not updated it.
 +      for (let attempt = 0; attempt < 5; attempt++) {
 +        const stored = await read(token), old = stored?.data;
-+        if (old && old.expiresAt <= now()) { cache.delete(token); throw failure(410, 'Download session expired'); }
++        const proof = await authority(token, old);
++        live(token, proof);
++        if (!patchOnly && identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
 +        if (!old && patchOnly) throw failure(503, 'Download metadata missing');
 +        if (old && !patchOnly && (old.photoKey !== input.photoKey || old.boothId !== input.boothId)) throw failure(409, 'Download identity conflict');
-+        const createdAt = old?.createdAt ?? now();
-+        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: createdAt + ttlMs };
++        const createdAt = proof.createdAt;
++        const next = old ? { ...old } : { photoKey: input.photoKey, boothId: input.boothId, createdAt, expiresAt: proof.expiresAt };
 +        for (const field of MEDIA) {
 +          if (input[field] == null || input[field] === '') continue;
 +          if (old?.[field] && old[field] !== input[field]) throw failure(409, 'Download media conflict');
@@ -2163,11 +2392,14 @@
 +  async function load(token) {
 +    keyFor(token);
 +    let data = cache.get(token);
-+    if (!data) { const stored = await read(token); data = stored?.data; }
++    if (!data) {
++      const stored = await read(token); data = stored?.data;
++      if (data) { const proof = await authority(token, data); if (!proof || proof.expiresAt <= now()) return null; }
++    }
 +    if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
 +    cache.set(token, data); return data;
 +  }
-+  return { save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
++  return { issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
 +}
 +module.exports = { createSessionMetadataStore };
 --- /dev/null

@@ -7,7 +7,7 @@ const baseline = await readFile(new URL('../../diagnosis-2026-10-30/capturism-ma
 const results = [];
 for (const version of ['baseline','candidate']) {
   const store = storage(), options = version === 'baseline' ? { code: baseline } : {};
-  const relay = makeQrRelay(store, options); store.objects.set(PHOTO, Buffer.alloc(32, 7)); store.failWrites = 1;
+  const relay = makeQrRelay(store, options); store.objects.set(PHOTO, Buffer.alloc(32, 7)); if (version === 'candidate') await relay.issue(); store.failWrites = 1;
   const initial = await relay.confirm(BODY);
   const failedCacheEntries = relay.cache.size, failedNotifications = relay.notifications.length;
   const beforeRecovery = await makeQrRelay(store, options).download(TOKEN);

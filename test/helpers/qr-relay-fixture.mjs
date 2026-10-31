@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import metadata from '../../candidate/capturism-relay/session-metadata.cjs';
 import { storageCommands } from './relay-fixture.mjs';
@@ -13,7 +14,10 @@ export function qrFunctions(source) {
     const a = source.indexOf(start), b = source.indexOf(end, a);
     assert.ok(a >= 0 && b > a, start); return source.slice(a, b);
   };
-  const code = section('function handlePhotosReady(', '/**\n * POST /api/dev/seed') +
+  const code = section('async function handleProxyAsset(', '/**\n * Validate the X-Booth-Auth') +
+    section('function handleSubscribe(', '/**\n * GET /api/admin/subscriptions.xlsx') +
+    section('function handleSignUpload(', '/**\n * POST /api/booth/photos-ready') +
+    section('function handlePhotosReady(', '/**\n * POST /api/dev/seed') +
     section('function handleDevSeed(', '/**\n * POST /api/subscribe') +
     section('async function storeSession(', '/**\n * Presign an R2 GET.') +
     section('async function patchSession(', '/**\n * Look for a session') +
@@ -26,7 +30,9 @@ export function makeQrRelay(store, { code = candidate, boothId = 'synthetic-boot
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now()])); } static now() { return now(); } }
   const context = { sessions: cache, SESSION_TTL_MS: 86400000, VIDEO_PENDING_GRACE_MS: 600000,
     R2_BUCKET: 'isolated-local-fixture', r2Client: store, ...storageCommands,
-    Buffer, Date: Clock, console: { log() {}, warn() {}, error() {} }, DEV_SEED_KEY: 'synthetic',
+    Buffer, crypto, Date: Clock, ALLOWED_UPLOAD_CONTENT_TYPES: new Set(['image/jpeg', 'image/png', 'video/mp4', 'video/webm']),
+    CONTENT_TYPE_EXT: { 'image/jpeg': 'jpg', 'image/png': 'png', 'video/mp4': 'mp4', 'video/webm': 'webm' }, SIGNED_UPLOAD_TTL_S: 300,
+    getSignedUrl: async (_, cmd) => 'http://127.0.0.1/upload/' + encodeURIComponent(cmd.input.Key), console: { log() {}, warn() {}, error() {} }, DEV_SEED_KEY: 'synthetic',
     authenticateBooth: () => boothId, broadcastToAdmins: event => notifications.push(event),
     readBody(req, callback) {
       void (async () => {
@@ -45,6 +51,8 @@ export function makeQrRelay(store, { code = candidate, boothId = 'synthetic-boot
   };
   vm.createContext(context); vm.runInContext(qrFunctions(code), context);
   return { ...context, cache, notifications,
+    issue: (token = TOKEN, photoKey = PHOTO) => context.sessionMetadata.issue(token, { boothId, photoKey }, { fresh: true }),
+    sign: body => new Promise((resolve, reject) => context.handleSignUpload({ body, fail: reject }, { resolve })),
     confirm: body => new Promise((resolve, reject) => context.handlePhotosReady({ body, fail: reject }, { resolve })),
     download: token => new Promise((resolve, reject) => { void context.handleGetDownload({}, { resolve }, token).catch(reject); }),
   };
