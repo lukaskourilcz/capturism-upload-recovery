@@ -1,8 +1,8 @@
-# Combined patch audit — local QR authorization fix; environment gates remain
+# Combined patch audit — HOLD: legacy video reconstruction
 
 Reviewed against Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Tested implementation `baf29cb6a32857b61e929f224491b9ef426589f9`. Production patch SHA-256 `cedda4c0d6102dbf29ce7b2ec4c9406eee6792066f79277d4c6bf0f30937a65b`; 26 changed files.
 
-**2026-10-31: R9 is resolved locally in `baf29cb`.** R1–R8 and the kiosk deadline remain valid in their tested scope. 186 twin tests, 27 kiosk tests and 16 phone tests pass. Authorization regressions deny unrelated records on new and legacy/public paths, including process restart. Release still requires actual kiosk/cloud/backup/cutover evidence. No deployment, push, live credentials/provider/device action or client message.
+**Re-review 2026-10-31: R10 medium is OPEN at photo-only legacy reconstruction.** R1–R9 and the kiosk deadline remain valid within their tested scope. Production implementation `baf29cb` and the 26-file patch hash above are unchanged. 193 twin tests, 27 kiosk tests and 16 phone tests pass; a separate candidate reproduction demonstrates R10. Reviewed snapshot `14d2f2d`, evidence `44e06f1`. No deployment, push, credentials, cloud/device action or client message.
 
 ## R1 — High: withdrawn entry recreated by replay — resolved locally
 
@@ -104,7 +104,17 @@ Public loads and final signing/proxy sinks recheck authorization. Approval delet
 
 Seventeen focused tests cover all media fields and write callers, new/legacy/public paths, owner conflicts, forged/changed/missing approvals, outages at load and final sinks, malformed/oversized/unversioned responses, expiry, offline manifest generation and SIGKILL/restart with approval retained or removed. The offline tool writes a new 0600 file without cloud access or overwrite. Private ownership verification and protected installation remain operator gates; the tool validates structure, not studio ownership evidence.
 
-Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current summary: `audit/qr-media-validation.json`. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
+Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current review: `audit/qr-media-final-rereview.json`; original R9 fix summary: `audit/qr-media-validation.json`. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
+
+## R10 — Medium: photo-only reconstruction loses approved legacy video — OPEN
+
+Trigger: active `sessions/<token>/meta.json` is absent after cleanup or partial restore, while original expiry proof, video clock, protected legacy approval and media bytes remain intact. The kiosk replays its ordinary photo-only confirmation with `videosPending:true`. Normal process restart with intact durable metadata and ordinary in-memory cache cleanup do not trigger this case. At `session-metadata.cjs:160–163`, reconstruction copies media only from the current request, so it acknowledges a new photo-only metadata record with 200. `qr-media-scope.cjs:51` skips approval lookup when those remaining references are canonical. Video discovery at `server.js:804` searches only the current token prefix, not the approved legacy location.
+
+Actual candidate-handler reproduction: the original download includes an approved noncanonical layout video; after metadata removal, photo-only replay returns 200, then download returns 200 with `layoutVideoUrl:null` and `videoFailed:true`. A fresh relay repeats that false failure although the approved original video bytes are unchanged. Original expiry and wait clocks stay unchanged; no private-record exposure is demonstrated. The seven added positive tests include recovery when the replay supplies all approved legacy fields; that result does not cover this common photo-only replay.
+
+Required resolution: reconstruction must preserve independently authorized, identity/date-bound legacy assets, or remain explicitly retryable/held for reconciliation rather than declaring confirmed absence. Do not trust arbitrary old metadata/client flags, renew any clock, auto-approve foreign assets or bypass R9. Test photo-only and full replay before/after grace, missing/revoked/mismatched approvals, competing relays, save failure/lost acknowledgement and process restart. A manifest authorizes keys; it is not a complete metadata/history backup.
+
+Evidence: `node audit/reproduce-legacy-media-restore.mjs` → `test-results/qr-media-rereview-open-legacy-restore.json`. Success of this separate script reproduces the defect; it is not a passing safe-recovery regression. No production code was changed in this review. Release remains on hold for R10 and the real-environment gates.
 
 ## Proof retention and legacy adoption review
 
@@ -123,9 +133,9 @@ New positive cases prove cold legacy recovery after failed proof persistence or 
 
 ## Final local validation
 
-Tested implementation `baf29cb6a32857b61e929f224491b9ef426589f9`, 2026-10-31. Production patch SHA-256 `cedda4c0d6102dbf29ce7b2ec4c9406eee6792066f79277d4c6bf0f30937a65b`, 26 changed files. Current summary: `audit/qr-media-validation.json`.
+Tested implementation `baf29cb6a32857b61e929f224491b9ef426589f9`, 2026-10-31. Production patch SHA-256 `cedda4c0d6102dbf29ce7b2ec4c9406eee6792066f79277d4c6bf0f30937a65b`, 26 changed files. Current review: `audit/qr-media-final-rereview.json`; original R9 fix summary: `audit/qr-media-validation.json`.
 
-- **186 twin tests, 27 targeted kiosk tests and 16 phone tests pass.** Seventeen dedicated authorization cases cover new and legacy mappings, public signing/streaming, read recovery and two process-replacement scenarios. Before/after evidence reproduces the baseline exposure and asserts candidate rejection.
+- **193 twin tests, 27 targeted kiosk tests and 16 phone tests pass.** Seven new partial-restore/revocation/concurrency cases pass; the separate photo-only legacy reproduction demonstrates OPEN R10. Green positive tests do not close it. Seventeen dedicated authorization cases cover new and legacy mappings, public signing/streaming, read recovery and two process-replacement scenarios. Before/after evidence reproduces the baseline exposure and asserts candidate rejection.
 - Kiosk TypeScript/full lint/build, phone TypeScript/build/component/helper lint, twin build, JavaScript syntax and isolated byte-exact artifact application pass. No production dependencies or lockfiles changed. Existing build/deprecation warnings remain.
 - Existing slow upload, idle failures, pool durability/withdrawal/duplicates, QR save/replay/expiry, video clock/discovery overlap and restart checks pass. The actual public proxy runs over loopback HTTP against synthetic objects; real R2/full relay startup/hardware remain unverified.
 - Canonical 50-reader discovery counts remain 6 warm/156 cold GET, 5 HEAD and 1 PUT. Approved legacy download adds 3 approval GETs on cold load and 2 on warm reads, intentionally checking revocation before public capabilities. Actual latency/capacity remains a staging gate.
@@ -133,7 +143,7 @@ Tested implementation `baf29cb6a32857b61e929f224491b9ef426589f9`, 2026-10-31. Pr
 
 ## Remaining issues and release gates
 
-**R1–R9 and the kiosk deadline are locally resolved within their tested scope.** Protected legacy approvals, ownership inventory, real provider persistence and rollout checks still require isolated staging evidence. Actual provider persistence, expiry-proof retention/legacy adoption and phone hosting still need staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
+**R10 must be resolved before release. R1–R9 and the kiosk deadline remain locally resolved within their tested scope.** Protected legacy approvals, ownership inventory, real provider persistence and rollout checks still require isolated staging evidence. Actual provider persistence, expiry-proof retention/legacy adoption and phone hosting still need staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
 
 **Launcher/update automation must be controlled.** `start-kiosk.bat` and `update-kiosk-auto.bat` switch a non-main/detached checkout to `main`, may stash tracked edits and pull again. A rollback to a detached SHA followed by the stock launcher is therefore not a pin. The revised rollout plan requires verified `main`/artifact alignment or an approved maintenance launcher, plus frozen automatic updates/restarts. Never run these launchers on this Mac as a rehearsal; they are Windows device/process operations.
 
@@ -143,6 +153,6 @@ Image deletion and metadata publication are not an atomic multi-object transacti
 
 The bridge queue remains single-writer, with durability beginning after local acknowledgement. Do not launch another worker against its folder, clear receipts, re-identify jobs or restore stale backups. Page closure before JPEG handoff, catastrophic disk failure and physical Windows power loss remain outside demonstrated durability. Corrupt/blocked/older-than-24h jobs retain bytes for review; no consent is renewed automatically.
 
-Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. The environment, private legacy approval, paired-state retention/backup, dependency and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
+Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. R10 and the environment, private legacy approval, paired-state retention/backup, dependency and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
 
 See the [final combined review](FINAL-REVIEW.md), [protocol and failure boundaries](PUBLICATION-FENCING.md), [coverage ledger](AUDIT-COVERAGE.md) and [rollout/rollback plan](ROLLOUT-ROLLBACK.md).

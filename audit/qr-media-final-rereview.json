@@ -1,0 +1,106 @@
+{
+  "date": "2026-10-31",
+  "reviewedSnapshot": "14d2f2d",
+  "implementationCommit": "baf29cb6a32857b61e929f224491b9ef426589f9",
+  "newReviewEvidenceCommit": "44e06f1585ea49bee9619840230325691ff75cf1",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "cedda4c0d6102dbf29ce7b2ec4c9406eee6792066f79277d4c6bf0f30937a65b",
+  "candidateFilesMatched": 26,
+  "productionSourceChanged": false,
+  "twinTestsPassed": 193,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "additionalPositiveReviewTests": 7,
+  "positiveChecks": [
+    "approved full-field reconstruction retains media and original clocks",
+    "missing/mismatched approval denies recreated legacy metadata",
+    "approval alone cannot establish issuance or wait authority",
+    "two-relay restored replay merges legacy variants without clock renewal",
+    "revocation between warm load and public sink denies reads/signing",
+    "copied approval cannot authorize another token",
+    "failed-save legacy reconstruction followed by SIGKILL/recovery; revoked approval denied after replacement"
+  ],
+  "openFindings": [
+    {
+      "id": "R10",
+      "priority": 2,
+      "severity": "medium",
+      "location": "candidate/capturism-relay/session-metadata.cjs:160-163; qr-media-scope.cjs:51; server.js:804",
+      "trigger": "Active metadata absent, original proof/wait/private approval/media retained, photo-only replay with videosPending:true",
+      "impact": "Successful reconstruction drops approved noncanonical legacy video reference; public download reports videoFailed:true before and after relay restart while original bytes still exist",
+      "reproduction": "audit/reproduce-legacy-media-restore.mjs",
+      "evidence": {
+        "finding": "R10",
+        "status": "OPEN",
+        "severity": "medium",
+        "interpretation": "Photo-only metadata reconstruction loses an approved noncanonical legacy video; presence/approval/bytes remain intact but public discovery checks only the current token prefix. This is a local synthetic reproduction, not a live incident.",
+        "before": {
+          "downloadStatus": 200,
+          "hasLegacyVideo": true
+        },
+        "after": {
+          "confirmationStatus": 200,
+          "downloadStatus": 200,
+          "hasLegacyVideo": false,
+          "videoFailed": true
+        },
+        "restart": {
+          "downloadStatus": 200,
+          "hasLegacyVideo": false,
+          "videoFailed": true
+        },
+        "originalVideoBytesAndApprovalPreserved": true,
+        "originalClocksPreserved": true,
+        "metadataLostLegacyReference": true,
+        "privateStorageExposure": false,
+        "cloudAccess": false
+      },
+      "required": "Preserve exact independently authorized legacy media on reconstruction or remain explicitly retryable/held, without broadening scope or renewing clocks; verify A13",
+      "notClaimed": [
+        "unrelated private-object exposure",
+        "live studio incident",
+        "failure when full legacy field set is replayed",
+        "ordinary restart or in-memory cache cleanup losing intact durable metadata"
+      ]
+    }
+  ],
+  "closedWithinExistingScope": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "kiosk deadline"
+  ],
+  "checks": "kiosk TypeScript/full lint/build, phone TypeScript/component+helper lint/build, twin build, exact patch and JavaScript syntax passed; all 14 kiosk/phone candidate files byte-match validated overlays",
+  "releaseStatus": "HOLD for R10/A13 plus real kiosk/cloud/private legacy/backup/dependency/cutover gates",
+  "operationCounts": "unchanged: canonical 50 readers 6 warm/156 cold GET +5 HEAD +1 PUT; approved legacy download 3 cold/2 warm approval GETs; actual cloud capacity not measured",
+  "remainingGates": [
+    "real SDK/R2 ACL/conditional/abort and lifecycle behavior",
+    "current private approval decisions and revocation-aware backup/restore",
+    "full relay integrations and disabled real notification/report effects in staging",
+    "Windows running SHA/launcher/disk/queue/hardware/idle checks",
+    "Pages/Render configuration, rollback artifact, cached and issued legacy capability cutover",
+    "baseline dependency reachability/upgrade disposition",
+    "exact release artifact and explicit authorization"
+  ],
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "liveProviderAccess": false,
+  "newDependencies": false,
+  "browserActions": false,
+  "evidence": [
+    "test-results/qr-media-rereview-focused.txt",
+    "test-results/qr-media-rereview-full-tests.txt",
+    "test-results/qr-media-rereview-kiosk-tests.txt",
+    "test-results/qr-media-rereview-phone-tests.txt",
+    "test-results/qr-media-rereview-artifact.json",
+    "test-results/qr-media-rereview-before-after.json",
+    "test-results/qr-media-rereview-open-legacy-restore.json"
+  ]
+}

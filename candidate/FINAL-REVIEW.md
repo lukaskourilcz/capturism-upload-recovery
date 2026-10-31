@@ -1,8 +1,18 @@
-# Final combined verification — QR media authorization fixed locally
+# Final combined re-review — HOLD: approved legacy video recovery
 
 2026-10-31. Tested implementation `baf29cb6a32857b61e929f224491b9ef426589f9`, based on Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Production patch SHA-256 `cedda4c0d6102dbf29ce7b2ec4c9406eee6792066f79277d4c6bf0f30937a65b`; 26 changed files. This includes R9 authorization, retaining the prior pool/QR fixes. No deployment, push, credentials, cloud/device/payment/print action or client message.
 
-Implementation `baf29cb` closes R9 locally while preserving the prior pool/QR fixes. Release remains on hold for real-environment gates.
+Reviewed snapshot `14d2f2d`, implementation unchanged at `baf29cb`, new review evidence `44e06f1`. R9 authorization remains locally valid. **R10 medium is a new recovery blocker**; this review changes tests/evidence/documentation only. The 26-file production patch hash is unchanged.
+
+## R10 — Medium: photo-only reconstruction loses approved legacy video — OPEN
+
+Trigger: active `sessions/<token>/meta.json` is absent after cleanup or partial restore, while original expiry proof, video clock, protected legacy approval and media bytes remain intact. The kiosk replays its ordinary photo-only confirmation with `videosPending:true`. Normal process restart with intact durable metadata and ordinary in-memory cache cleanup do not trigger this case. At `session-metadata.cjs:160–163`, reconstruction copies media only from the current request, so it acknowledges a new photo-only metadata record with 200. `qr-media-scope.cjs:51` skips approval lookup when those remaining references are canonical. Video discovery at `server.js:804` searches only the current token prefix, not the approved legacy location.
+
+Actual candidate-handler reproduction: the original download includes an approved noncanonical layout video; after metadata removal, photo-only replay returns 200, then download returns 200 with `layoutVideoUrl:null` and `videoFailed:true`. A fresh relay repeats that false failure although the approved original video bytes are unchanged. Original expiry and wait clocks stay unchanged; no private-record exposure is demonstrated. The seven added positive tests include recovery when the replay supplies all approved legacy fields; that result does not cover this common photo-only replay.
+
+Required resolution: reconstruction must preserve independently authorized, identity/date-bound legacy assets, or remain explicitly retryable/held for reconciliation rather than declaring confirmed absence. Do not trust arbitrary old metadata/client flags, renew any clock, auto-approve foreign assets or bypass R9. Test photo-only and full replay before/after grace, missing/revoked/mismatched approvals, competing relays, save failure/lost acknowledgement and process restart. A manifest authorizes keys; it is not a complete metadata/history backup.
+
+Evidence: `node audit/reproduce-legacy-media-restore.mjs` → `test-results/qr-media-rereview-open-legacy-restore.json`. Success of this separate script reproduces the defect; it is not a passing safe-recovery regression. No production code was changed in this review. Release remains on hold for R10 and the real-environment gates.
 
 ## R9 — High: unrelated storage records exposed as QR media — resolved locally
 
@@ -16,7 +26,7 @@ Public loads and final signing/proxy sinks recheck authorization. Approval delet
 
 Seventeen focused tests cover all media fields and write callers, new/legacy/public paths, owner conflicts, forged/changed/missing approvals, outages at load and final sinks, malformed/oversized/unversioned responses, expiry, offline manifest generation and SIGKILL/restart with approval retained or removed. The offline tool writes a new 0600 file without cloud access or overwrite. Private ownership verification and protected installation remain operator gates; the tool validates structure, not studio ownership evidence.
 
-Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current summary: `audit/qr-media-validation.json`. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
+Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current review: `audit/qr-media-final-rereview.json`; original R9 fix summary: `audit/qr-media-validation.json`. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
 
 ## R8 — video discovery recovery — closed locally
 
@@ -28,18 +38,18 @@ The 20-second negative cache is now a WeakMap keyed by the validated session obj
 
 ## Local recovery evidence
 
-- **186 twin tests**, **27 targeted kiosk tests**, **16 phone tests** pass. Fifteen new discovery cases plus three process-restart cases cover 403/429/500/503, mixed outcomes, failed/lost save acknowledgement, overlapping success/failure, stalled/abort-ignoring reads, late save completion, grace crossing, stale metadata, legacy probe flags and retention expiry.
+- **193 twin tests**, **27 targeted kiosk tests**, **16 phone tests** pass. Fifteen new discovery cases plus three process-restart cases cover 403/429/500/503, mixed outcomes, failed/lost save acknowledgement, overlapping success/failure, stalled/abort-ignoring reads, late save completion, grace crossing, stale metadata, legacy probe flags and retention expiry.
 - Real handler child processes return retryable failure for a read/save fault, are killed, and recover the existing video after restart. A third is killed after discovery metadata is durable but before acknowledgement; restart reads that commit without another save. Original video/photo bytes, proof, wait record and all original timestamps are preserved.
 - The former R8 provider/phone probes now assert safe recovery: 503 → immediate retry → original video; overlapping readers both receive the discovered media. Historical unsafe evidence remains in `test-results/qr-clock-review-open-probe.json` and `qr-clock-review-phone-tests.txt`.
 - Chrome against the local actual handler: HEAD outage at/after video grace → Try again; restore provider → same QR shows photo and video download links. The trace shows 503 → 200 and exactly one necessary discovery metadata write (three setup writes become four), with no media upload. Synthetic SVG/video bytes only; no real media, contact form or sharing action. Screenshots: `test-results/qr-discovery-retry.png`, `qr-discovery-recovered.png`; trace: `qr-discovery-browser-server.txt`. Both temporary services stopped.
 
 ## Verification and release boundary
 
-Kiosk TypeScript/full lint/build, phone TypeScript/build/component/helper lint, twin build, candidate JavaScript syntax and isolated exact patch application pass. All 26 candidate files match. Existing build/deprecation warnings remain; no dependencies or lockfiles changed. Current summary: `audit/qr-media-validation.json`; current outputs: `test-results/qr-media-*`. Prior fix evidence remains under `qr-discovery-*`.
+Kiosk TypeScript/full lint/build, phone TypeScript/build/component/helper lint, twin build, candidate JavaScript syntax and isolated exact patch application pass. All 26 candidate files match. Existing build/deprecation warnings remain; no dependencies or lockfiles changed. Current review: `audit/qr-media-final-rereview.json`; original R9 fix summary: `audit/qr-media-validation.json`; current outputs: `test-results/qr-media-*`. Prior fix evidence remains under `qr-discovery-*`.
 
-R1–R9 and the kiosk upload deadline are locally resolved within their tested scope. Private legacy ownership approval still requires operator evidence; existing metadata alone never proves ownership. This does not verify full relay integrations, real SDK/R2 behavior/paired retention/backups, physical Windows/hardware/power-loss/studio idle conditions, Render/Pages settings or dependency reachability. Coalescing is per relay process; other relays reconcile through durable conditional metadata, not a shared in-flight map.
+R1–R9 and the kiosk upload deadline remain locally resolved within their tested scope; R10 is separately open for partial legacy reconstruction. Private legacy ownership approval still requires operator evidence; existing metadata alone never proves ownership. This does not verify full relay integrations, real SDK/R2 behavior/paired retention/backups, physical Windows/hardware/power-loss/studio idle conditions, Render/Pages settings or dependency reachability. Coalescing is per relay process; other relays reconcile through durable conditional metadata, not a shared in-flight map.
 
-The [rollout/rollback plan](ROLLOUT-ROLLBACK.md) marks A11/A12 locally passed, retains isolated staging/kiosk/cloud checks, preserves both QR clock prefixes, current legacy authorization/revocation state and metadata timestamps, and requires a rollback artifact retaining discovery error handling/coalescing. Do not clear media or clocks to force a retry. Release remains on hold for those environment and legacy cutover gates. Nothing is deployed or sent.
+The [rollout/rollback plan](ROLLOUT-ROLLBACK.md) marks A11/A12 locally passed, retains isolated staging/kiosk/cloud checks, preserves both QR clock prefixes, current legacy authorization/revocation state and metadata timestamps, and requires a rollback artifact retaining discovery error handling/coalescing. Do not clear media or clocks to force a retry. Release remains on hold for R10 and those environment and legacy cutover gates. Nothing is deployed or sent.
 
 ## Additional overlap, restart and load checks
 
@@ -48,3 +58,9 @@ Five new positive tests pass: a different relay commits metadata during an all-m
 Local operation counts for 50 readers: warm **6 GET / 5 HEAD / 1 PUT**; cold **156 GET / 5 HEAD / 1 PUT**. Discovery/save coalescing works, while initial cold metadata hydration is not coalesced. This is a measured local provider count, not a live latency/cost/admission benchmark or a new correctness blocker. Verify cold-start SDK/hosting load and timeout behavior in staging before release. Kiosk/phone/twin typecheck/lint/build, exact artifact and all existing failures/recovery checks pass. No new browser operation or preview service was needed in this review.
 
 Approved legacy reads perform 3 approval GETs when cold and 2 when warm; revocation is rechecked before public signing/streaming. Canonical reads add no approval storage request. Verify real legacy volume, caching and storage permissions in staging.
+
+## Added legacy approval / restore checks
+
+Seven positive tests in `test/qr-media-final-review.test.mjs` pass: full legacy replay after metadata removal preserves media/proof/wait/approval; missing/mismatched approval blocks recreation; approval alone cannot mint a new clock; simultaneous legacy replays merge variants; revocation between load and public sink blocks signing/target reads; a copied approval cannot authorize another token; failed-save reconstruction recovers after SIGKILL and revoked approval remains denied after another replacement. The child processes retain disk-backed synthetic provider state and never reseed media.
+
+The separate R10 test uses the common photo-only replay instead of supplying every old video field; it reproduces loss of the approved legacy layout reference and false final absence before/after restart. No source fix was included. Preserve active legacy metadata and park incomplete legacy restores until A13 passes. No new cloud/browser/device operation or message was used.

@@ -1,6 +1,6 @@
 # Durable QR confirmation and expiry — local candidate
 
-Combined implementation `baf29cb`, based on Capturism `1f2df64`. R3–R9 are resolved locally within their tested scope, including media-key authorization; see [final verification](FINAL-REVIEW.md). Actual provider/kiosk/phone-hosting and paired-state retention/backup checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, device operation or client message.
+Combined implementation `baf29cb`, based on Capturism `1f2df64`. R3–R9 remain resolved locally within their tested scope, including media-key authorization; R10 medium remains OPEN for photo-only reconstruction after legacy metadata loss; see [final verification](FINAL-REVIEW.md). Actual provider/kiosk/phone-hosting and paired-state retention/backup checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, device operation or client message.
 
 ## Issuance and original expiry
 
@@ -37,7 +37,7 @@ Kiosk recovery still reuses its original Blob/token/completed PUT checkpoint aft
 
 ## Evidence and reproduction
 
-186 twin tests, 27 targeted kiosk tests and 16 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 26-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
+193 twin tests, 27 targeted kiosk tests and 16 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 26-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
 
 `node audit/reproduce-qr-expiry-recovery.mjs` now asserts safe R4/R5 outcomes (`test-results/qr-expiry-after.json`); prior unsafe output is retained separately. `node audit/reproduce-qr-persistence.mjs` still compares baseline false acknowledgement to safe candidate recovery. `node audit/verify-qr-artifact.mjs` checks exact isolated patch application. `node audit/prepare-phone-check.mjs` prepares the isolated phone test checkout using already-installed kiosk dev tools.
 
@@ -79,9 +79,19 @@ Public loads and final signing/proxy sinks recheck authorization. Approval delet
 
 Seventeen focused tests cover all media fields and write callers, new/legacy/public paths, owner conflicts, forged/changed/missing approvals, outages at load and final sinks, malformed/oversized/unversioned responses, expiry, offline manifest generation and SIGKILL/restart with approval retained or removed. The offline tool writes a new 0600 file without cloud access or overwrite. Private ownership verification and protected installation remain operator gates; the tool validates structure, not studio ownership evidence.
 
-Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current summary: `audit/qr-media-validation.json`. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
+Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current review: `audit/qr-media-final-rereview.json`; original R9 fix summary: `audit/qr-media-validation.json`. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
 
 Five added discovery overlap/restart cases pass, including cross-relay commits, conflicts, warm/cold 50-reader bursts and ephemeral negative-cache restart. Actual cloud load remains a gate: cold initial hydration is not coalesced. R9 has separate write/read authorization evidence above.
+
+## R10 — Medium: photo-only reconstruction loses approved legacy video — OPEN
+
+Trigger: active `sessions/<token>/meta.json` is absent after cleanup or partial restore, while original expiry proof, video clock, protected legacy approval and media bytes remain intact. The kiosk replays its ordinary photo-only confirmation with `videosPending:true`. Normal process restart with intact durable metadata and ordinary in-memory cache cleanup do not trigger this case. At `session-metadata.cjs:160–163`, reconstruction copies media only from the current request, so it acknowledges a new photo-only metadata record with 200. `qr-media-scope.cjs:51` skips approval lookup when those remaining references are canonical. Video discovery at `server.js:804` searches only the current token prefix, not the approved legacy location.
+
+Actual candidate-handler reproduction: the original download includes an approved noncanonical layout video; after metadata removal, photo-only replay returns 200, then download returns 200 with `layoutVideoUrl:null` and `videoFailed:true`. A fresh relay repeats that false failure although the approved original video bytes are unchanged. Original expiry and wait clocks stay unchanged; no private-record exposure is demonstrated. The seven added positive tests include recovery when the replay supplies all approved legacy fields; that result does not cover this common photo-only replay.
+
+Required resolution: reconstruction must preserve independently authorized, identity/date-bound legacy assets, or remain explicitly retryable/held for reconciliation rather than declaring confirmed absence. Do not trust arbitrary old metadata/client flags, renew any clock, auto-approve foreign assets or bypass R9. Test photo-only and full replay before/after grace, missing/revoked/mismatched approvals, competing relays, save failure/lost acknowledgement and process restart. A manifest authorizes keys; it is not a complete metadata/history backup.
+
+Evidence: `node audit/reproduce-legacy-media-restore.mjs` → `test-results/qr-media-rereview-open-legacy-restore.json`. Success of this separate script reproduces the defect; it is not a passing safe-recovery regression. No production code was changed in this review. Release remains on hold for R10 and the real-environment gates.
 
 ## Offline legacy approval procedure — no cloud action performed
 
@@ -98,3 +108,7 @@ This offline command writes one new `qr-media-approvals/<token hash>.json` (0600
 Only a separately authorized operator procedure may install the reviewed file using private, restricted storage access. Verify booth sign/confirm, dev seed and public handlers cannot write that prefix; public direct bucket access must be disabled. Preserve original metadata, proof and wait-clock bytes; approval never establishes or extends expiry. Review any non-session historical filenames separately; the current tool intentionally refuses those keys. With all legacy writers stopped, rehearse replay, approved public reads and fresh-process recovery in isolated staging before release.
 
 To revoke, remove the protected manifest under that approved procedure; subsequent warm/cold application reads deny it. Already-returned URLs/cache/downloads can remain usable until their own expiry. Back up current approval/revocation state privately and restore it with the matching identity/clocks. Never restore a revoked approval from a stale backup without re-review. No remote manifests or migration were created here.
+
+Before restoring any approval, verify a private current decision manifest listing approved/revoked token hashes, approval content hashes and original identity/retention evidence. Missing or ambiguous current decisions require reconciliation; a dated bucket snapshot is not permission to restore an approval. Revocation affects noncanonical asset authorization, not every separately authorized canonical asset or already-issued read capability.
+
+R10 caution: preserve the active original legacy metadata alongside proof/wait/approval/media. A photo-only replay does not recover omitted legacy video keys, even when their approval survives. Until fixed, park affected incomplete legacy restores; do not use a successful confirmation alone as recovery evidence. Check each expected approved video in the recovered public response and original stored bytes in isolated staging.
