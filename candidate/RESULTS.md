@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current verification is in [AUDIT.md](AUDIT.md): 132 twin tests, 27 targeted kiosk tests and 7 positive phone tests pass. The latest [review](FINAL-REVIEW.md) of unchanged implementation `485d20a` finds R6 (stalled phone reads) and R7 (issuance-based video wait regression) OPEN, with separate unsafe reproductions. R1–R5 and the shared kiosk deadline remain covered within their tested scope. The [plan](ROLLOUT-ROLLBACK.md) requires those fixes, verified proof backup/restore and actual kiosk/cloud/dependency/cutover gates before release. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe the earlier candidate, superseded by the current contracts.
+This document records the initial QR experiment. Current verification is in [AUDIT.md](AUDIT.md): 142 twin tests, 27 targeted kiosk tests and 15 phone tests pass. Implementation `d8dea04` resolves R6 (stalled phone read timeout/retry) and R7 (independent persistent video wait) locally, alongside the earlier pool/QR fixes. [Final verification](FINAL-REVIEW.md) includes slow upload, replay and real process-restart evidence. Actual kiosk/cloud/paired-retention/backup, dependency and cutover gates remain. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate, superseded by the current contracts.
 
 ## Reproduction
 

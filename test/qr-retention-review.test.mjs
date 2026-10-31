@@ -7,6 +7,7 @@ import { storage, storageCommands } from './helpers/relay-fixture.mjs';
 import { makeQrRelay, TOKEN, PHOTO, BODY } from './helpers/qr-relay-fixture.mjs';
 const KEY = `sessions/${TOKEN}/meta.json`;
 const PROOF = `qr-expiry/v1/${createHash('sha256').update(TOKEN).digest('hex')}.json`;
+const WAIT = PROOF.replace('qr-expiry/', 'qr-video-wait/');
 const NOW = 2000000;
 const legacy = { photoKey: PHOTO, boothId: 'synthetic-booth', createdAt: 1000000, expiresAt: 87400000,
   layoutVideoKey: 'historical/random-layout.mp4', historicalField: 'preserve' };
@@ -65,7 +66,7 @@ test('backup review: actual pool snapshot omits QR proof but its pruner preserve
   class ListObjectsV2Command { constructor(input) { this.input = input; } }
   class CopyObjectCommand { constructor(input) { this.input = input; } }
   class DeleteObjectCommand { constructor(input) { this.input = input; } }
-  const objects = new Map([[PROOF, 'proof'], ['pool/example.json', 'pool'], ['pool-portraits/example.jpg','photo'], ['pool-deletions/example.json','fence'], ['backups/pool/2000-01-01/qr-expiry/v1/old.json','old snapshot']]);
+  const objects = new Map([[PROOF, 'proof'], [WAIT, 'clock'], ['pool/example.json', 'pool'], ['pool-portraits/example.jpg','photo'], ['pool-deletions/example.json','fence'], ['backups/pool/2000-01-01/qr-expiry/v1/old.json','old snapshot']]);
   const requests = [], module = { exports: {} };
   const client = { async send(command) {
     const input = command.input; requests.push({ operation: command.constructor.name, ...input });
@@ -80,8 +81,8 @@ test('backup review: actual pool snapshot omits QR proof but its pruner preserve
     require: name => { assert.equal(name, '@aws-sdk/client-s3'); return { ...storageCommands, ListObjectsV2Command, CopyObjectCommand, DeleteObjectCommand }; },
   });
   module.exports.configureForReview(client, 'isolated'); await module.exports.runBackup();
-  assert.equal(objects.get(PROOF), 'proof');
-  assert.equal(requests.some(r => r.operation === 'CopyObjectCommand' && decodeURIComponent(r.CopySource).includes('qr-expiry/')), false);
+  assert.equal(objects.get(PROOF), 'proof'); assert.equal(objects.get(WAIT), 'clock');
+  assert.equal(requests.some(r => r.operation === 'CopyObjectCommand' && /qr-(expiry|video-wait)\//.test(decodeURIComponent(r.CopySource))), false);
   assert.equal(objects.has('backups/pool/2000-01-01/qr-expiry/v1/old.json'), false);
   assert.equal(requests.filter(r => r.operation === 'DeleteObjectCommand').every(r => r.Key.startsWith('backups/pool/')), true);
   assert.equal(requests.filter(r => r.operation === 'CopyObjectCommand').length, 3);

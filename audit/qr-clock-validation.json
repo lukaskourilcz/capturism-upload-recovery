@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-31",
+  "implementationCommit": "d8dea047bfea8e4267a2708db3b249ca6df08306",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "75e0a3292d4a4c1e53b348bc23e851a6cec3a42b27e39cd51c8e8205283b8f5e",
+  "matchedCandidateFiles": 24,
+  "twinTestsPassed": 142,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 15,
+  "formerlyUnsafeR6R7Probes": "now assert safe behavior; historical unsafe outputs retained",
+  "closedLocally": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "shared kiosk QR deadline"
+  ],
+  "phoneDeadlineMs": 20000,
+  "videoClock": "first durable metadata commit attempt; recorded metadata timestamp plus create-only independent record; legacy fallback from durable creation",
+  "retention": "original expiry unchanged; preserve qr-expiry/v1/ and qr-video-wait/v1/ plus metadata confirmation time",
+  "checks": {
+    "typecheck": "passed, kiosk and phone",
+    "lint": "passed, kiosk full and phone changed component/helper",
+    "builds": "passed, kiosk/phone/twin",
+    "exactPatchAndJavaScriptSyntax": "passed"
+  },
+  "browser": {
+    "outcome": "stalled read -> timeout/retry -> same synthetic photo",
+    "storageWritesBeforeAndAfter": 3,
+    "screenshots": [
+      "test-results/qr-clock-phone-timeout.png",
+      "test-results/qr-clock-phone-recovered.png"
+    ],
+    "previewServicesStopped": true
+  },
+  "restart": [
+    "acknowledged photo SIGKILL recovery",
+    "expired replay after metadata cleanup denied",
+    "independent video clock survives SIGKILL and original video bytes recovered"
+  ],
+  "remainingGates": [
+    "actual R2 SDK/conditional operations/paired-prefix lifecycle and backup restore",
+    "full relay integrations",
+    "Windows/hardware/power loss and actual idle behavior",
+    "Pages/Render targets and limits",
+    "baseline dependency disposition",
+    "controlled legacy-writer/capability/launcher cutover"
+  ],
+  "limits": [
+    "paired loss of both metadata and video clock cannot reconstruct the former wait start; reconcile affected restore work",
+    "client abort does not prove pending provider work stopped",
+    "JavaScript cannot render feedback while the main thread is suspended"
+  ],
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-clock-full-tests.txt",
+    "test-results/qr-clock-focused.txt",
+    "test-results/qr-clock-phone-tests.txt",
+    "test-results/qr-clock-kiosk-tests.txt",
+    "test-results/qr-clock-artifact.json",
+    "test-results/qr-clock-video-grace.json",
+    "test-results/qr-clock-expiry-after.json",
+    "test-results/qr-clock-persistence-after.json",
+    "test-results/qr-clock-retention-tests.txt",
+    "test-results/qr-clock-browser-server.txt"
+  ]
+}
