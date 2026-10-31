@@ -1,0 +1,179 @@
+{
+  "date": "2026-10-31",
+  "implementationCommit": "8d0f2651b554c8247a943f65e5c1a43f9ed6f241",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "92e61b8656d1dead978514db0e0ddea10e7839f301b6f7cbaeb7ad70d5e23659",
+  "candidateFilesMatched": 26,
+  "twinTestsPassed": 242,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "dedicatedR11Regressions": 24,
+  "closedLocally": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "R10",
+    "R11",
+    "kiosk deadline"
+  ],
+  "refresh": {
+    "trigger": "403 scope denial of a warm/loaded snapshot; transient approval read error stays 503",
+    "workBound": "one fresh validation pass per resolver checkpoint; fresh denial is not recursively retried",
+    "clockAndIdentity": "fresh metadata must match original photo/booth, creation, expiry and known wait; independently validate proof/wait",
+    "success": "use returned resolved record for signing and select proxy key only afterward",
+    "readFailure": "503 retryable; no stale forbidden asset fallback or successful cache promotion",
+    "missingExpiredUnsafe": "terminal denial, no renewed lifetime or automatic metadata/media reconstruction",
+    "races": "initial load and final public guard both resolve snapshots; concurrent new cache entries are not deleted as if they were the stale one",
+    "writes": "zero in tested intact-authority recovery; legacy cold proof/wait adoption remains a possible read side effect elsewhere",
+    "deadlineLimit": "single pass bounds retry work, not total transport duration; existing phone/kiosk deadlines and actual SDK timeout staging checks remain",
+    "coalescing": "concurrent metadata hydration is not coalesced"
+  },
+  "before": {
+    "finding": "R11",
+    "status": "OPEN",
+    "severity": "medium",
+    "interpretation": "A stale denied legacy cache masks a valid recovered canonical photo mapping. Repeated public reads remain terminal 404 until cache eviction/restart, while another relay serves 200. Revoked video is never read; no unrelated object exposure or live incident claimed.",
+    "cases": [
+      {
+        "revocation": "removed",
+        "confirmationStatus": 200,
+        "recoveredRelayDownload": 200,
+        "recoveredRelayPhotoProxy": 200,
+        "staleRelayDownload": 404,
+        "staleRelayRepeatedDownload": 404,
+        "staleRelayPhotoProxy": 404,
+        "freshRelayDownload": 200,
+        "afterLocalCacheEvictionDownload": 200,
+        "revokedVideoObjectReads": 0,
+        "originalClocksAndMediaPreserved": true,
+        "publicReadWrites": 0
+      },
+      {
+        "revocation": "narrowed",
+        "confirmationStatus": 200,
+        "recoveredRelayDownload": 200,
+        "recoveredRelayPhotoProxy": 200,
+        "staleRelayDownload": 404,
+        "staleRelayRepeatedDownload": 404,
+        "staleRelayPhotoProxy": 404,
+        "freshRelayDownload": 200,
+        "afterLocalCacheEvictionDownload": 200,
+        "revokedVideoObjectReads": 0,
+        "originalClocksAndMediaPreserved": true,
+        "publicReadWrites": 0
+      }
+    ]
+  },
+  "after": {
+    "finding": "R11",
+    "status": "resolved locally",
+    "severity": "medium",
+    "interpretation": "Denied legacy snapshots refresh to the valid recovered photo mapping. Warm/fresh relays and public photo proxy agree on 200 without cache eviction; revoked video reads remain zero. Synthetic local provider and loopback HTTP only.",
+    "cases": [
+      {
+        "revocation": "removed",
+        "confirmationStatus": 200,
+        "recoveredRelayDownload": 200,
+        "recoveredRelayPhotoProxy": 200,
+        "staleRelayDownload": 200,
+        "staleRelayRepeatedDownload": 200,
+        "staleRelayPhotoProxy": 200,
+        "freshRelayDownload": 200,
+        "afterLocalCacheEvictionDownload": 200,
+        "revokedVideoObjectReads": 0,
+        "revokedVideoProxy": 404,
+        "originalClocksAndMediaPreserved": true,
+        "publicReadWrites": 0
+      },
+      {
+        "revocation": "narrowed",
+        "confirmationStatus": 200,
+        "recoveredRelayDownload": 200,
+        "recoveredRelayPhotoProxy": 200,
+        "staleRelayDownload": 200,
+        "staleRelayRepeatedDownload": 200,
+        "staleRelayPhotoProxy": 200,
+        "freshRelayDownload": 200,
+        "afterLocalCacheEvictionDownload": 200,
+        "revokedVideoObjectReads": 0,
+        "revokedVideoProxy": 404,
+        "originalClocksAndMediaPreserved": true,
+        "publicReadWrites": 0
+      }
+    ]
+  },
+  "metadataHelperCounts": {
+    "deniedWarmRefresh": {
+      "GetObjectCommand": 4,
+      "PutObjectCommand": 0,
+      "HeadObjectCommand": 0,
+      "metadataGETs": 1
+    },
+    "validWarmLoad": {
+      "GetObjectCommand": 0,
+      "PutObjectCommand": 0,
+      "HeadObjectCommand": 0,
+      "metadataGETs": 0
+    },
+    "overlapping20": {
+      "GetObjectCommand": 80,
+      "PutObjectCommand": 0,
+      "HeadObjectCommand": 0,
+      "metadataGETs": 20
+    },
+    "interpretation": "Metadata helper operation counts with retained proof/wait; one fresh pass per caller, concurrent hydration is not coalesced. Public video-discovery probes/signing are outside this measurement; no live latency/cost claim."
+  },
+  "restartCases": [
+    "warm child relay with synthetic durable provider replaced under its old cache serves valid photo and denies video, then SIGKILL/restart retains original bytes and decisions",
+    "warm child returns retryable 503 on forced metadata refresh read outage; SIGKILL/healthy replacement recovers the same photo without changing clocks or restoring approval"
+  ],
+  "checks": {
+    "twin": "passed",
+    "kioskTypeScriptFullLintBuild": "passed",
+    "phoneTypeScriptComponentHelperLintBuild": "passed",
+    "twinBuild": "passed",
+    "isolatedExactArtifactAndJavaScriptSyntax": "passed",
+    "clientValidatedOverlayBytes": "all 14 candidate kiosk/phone source files match",
+    "priorQRSaveReplayExpiryClockDiscoveryAuthorizationAndPoolQueueWithdrawalDuplicates": "passed"
+  },
+  "remainingGates": [
+    "actual SDK/R2 permissions, Get/ETag/conditional/abort/transport timeout and warm/concurrent load behavior",
+    "current private legacy source ownership and revocation-aware backup/restore; existing truncated-record reconciliation",
+    "full relay startup/integrations in isolated staging with real notification/report effects disabled",
+    "Windows running SHA, launcher/update control, queue/disk/hardware and studio idle",
+    "Pages/Render configuration, replica/rolling-process routing and read/write capability/cache cutover",
+    "coherent rollback retaining new resolver and server use of resolved keys plus all earlier fencing/clocks",
+    "baseline dependency disposition",
+    "exact release artifact and explicit authorization"
+  ],
+  "releaseStatus": "R11/A14 locally passed; real-environment/private legacy release gates remain; no release performed",
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "liveProviderAccess": false,
+  "browserActions": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-cache-before-tests.txt",
+    "test-results/qr-cache-before.json",
+    "test-results/qr-cache-after.json",
+    "test-results/qr-cache-focused.txt",
+    "test-results/qr-cache-full-tests.txt",
+    "test-results/qr-cache-kiosk-tests.txt",
+    "test-results/qr-cache-phone-tests.txt",
+    "test-results/qr-cache-artifact.json",
+    "test-results/qr-cache-read-counts.json",
+    "test-results/qr-cache-authorization.json",
+    "test-results/qr-cache-legacy-recovery.json",
+    "test-results/qr-cache-persistence.json",
+    "test-results/qr-cache-expiry.json",
+    "test-results/qr-cache-grace.json"
+  ],
+  "historicalReview": "audit/qr-legacy-final-rereview.json records original OPEN R11 and is superseded by this validation for current status"
+}
