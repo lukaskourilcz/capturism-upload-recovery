@@ -1,6 +1,6 @@
 # Durable QR confirmation and expiry — local candidate
 
-Combined implementation `d8dea04`, based on Capturism `1f2df64`. R3–R7 are resolved locally within their tested scope; see [final verification](FINAL-REVIEW.md). Actual provider/kiosk/phone-hosting and paired-state retention/backup checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, device operation or client message.
+Combined implementation `d8dea04`, based on Capturism `1f2df64`. R3–R7 remain resolved locally within their tested scope; later review finds OPEN R8 in actual video discovery; see [final verification](FINAL-REVIEW.md). Actual provider/kiosk/phone-hosting and paired-state retention/backup checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, device operation or client message.
 
 ## Issuance and original expiry
 
@@ -37,7 +37,7 @@ Kiosk recovery still reuses its original Blob/token/completed PUT checkpoint aft
 
 ## Evidence and reproduction
 
-142 twin tests, 27 targeted kiosk tests and 15 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 24-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
+146 twin tests, 27 targeted kiosk tests and 15 positive phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 24-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
 
 `node audit/reproduce-qr-expiry-recovery.mjs` now asserts safe R4/R5 outcomes (`test-results/qr-expiry-after.json`); prior unsafe output is retained separately. `node audit/reproduce-qr-persistence.mjs` still compares baseline false acknowledgement to safe candidate recovery. `node audit/verify-qr-artifact.mjs` checks exact isolated patch application. `node audit/prepare-phone-check.mjs` prepares the isolated phone test checkout using already-installed kiosk dev tools.
 
@@ -54,3 +54,11 @@ Success requires both metadata and wait record to be durable, in addition to iss
 Exclude both authority prefixes from sessions cleanup and preserve them in verified current backup/restore and compatible rollback. The built-in pool backup includes neither. If both metadata and its wait record are lost, the previous wait start cannot be reconstructed; affected restore work needs reconciliation rather than a promise of preserved waiting. Original expiry proof still caps retention.
 
 Current evidence: `audit/qr-clock-validation.json`, `test-results/qr-clock-*`. The old R6/R7 probes now assert safe behavior. Historical unsafe evidence is retained separately under `qr-retention-*`. Ten clock tests cover slow photo and metadata recovery, replay/concurrency/expiry, failed/lost clock saves, legacy/partial restores and SIGKILL followed by video retrieval. Phone deadline tests cover stalled headers/body, abort-ignoring late results, rapid retries, unmount and terminal expiry. Nothing is deployed.
+
+## Actual discovery re-review — OPEN R8
+
+The persistent clocks and whole-read timeout remain valid, but an inherited probe path can report an existing video as failed. All HEAD exceptions are treated as missing and `lastProbeAt` is set before reads/save finish; a failed or concurrent probe can therefore cause a final empty 200, bypassing phone error retry. This was hidden by the earlier QR fixture's deliberate no-op probe. Fixtures now execute actual discovery by default.
+
+`audit/reproduce-video-probe-read.mjs` demonstrates transient HEAD failure, failed save → immediate retry, and concurrent readers. `audit/phone-video-discovery.review.test.tsx` demonstrates stopped polling/no retry for that false-success response. These are unsafe reproductions, not fixed behavior. `audit/qr-clock-rereview.json` records the review. The [plan](ROLLOUT-ROLLBACK.md) adds A11: only confirmed absence may end discovery; unreadable/in-flight/failed-save state must remain retryable without clearing media or resetting clocks.
+
+Additional process-kill tests pass at metadata/clock/acknowledgement boundaries. The video restart fixture now introduces bytes only after the waiting check and recovers an actual orphan after restart. Production source is unchanged by this review. Release remains on hold for R8 and existing environment/retention/cutover gates.

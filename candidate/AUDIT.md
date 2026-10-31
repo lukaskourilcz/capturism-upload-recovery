@@ -1,8 +1,8 @@
-# Combined patch audit — R6/R7 fixed locally; release gated
+# Combined patch audit — HOLD: unconfirmed video discovery
 
 Reviewed against Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Tested combined implementation `d8dea047bfea8e4267a2708db3b249ca6df08306`. Production patch SHA-256 `75e0a3292d4a4c1e53b348bc23e851a6cec3a42b27e39cd51c8e8205283b8f5e`; 24 changed files.
 
-**2026-10-31: R6 and R7 are resolved locally.** R1–R5 and the shared kiosk deadline remain covered. 142 twin tests, 27 targeted kiosk tests and 15 phone tests pass. Real kiosk/cloud/paired-retention/backup/dependency/cutover checks still gate release. No deployment, push, provider/device/payment/print action, credential access or client message was performed.
+**Re-review 2026-10-31: R8 (medium false video absence after discovery failure/in-flight work) is OPEN.** R1–R7 and the kiosk deadline remain covered within their tested scope. Production source/patch are unchanged. 146 twin tests, 27 targeted kiosk tests and 15 positive phone tests pass; separate unsafe probes demonstrate R8. Real kiosk/cloud/paired-retention/backup/dependency/cutover checks remain. No deployment, push, provider/device/payment/print action, credential access or client message was performed.
 
 ## R1 — High: withdrawn entry recreated by replay — resolved locally
 
@@ -82,6 +82,16 @@ If only the clock record is missing, metadata restores its exact timestamp. Lega
 
 Ten added clock tests pass: slow nine-minute photo, failed metadata then delayed recovery, before/on/after grace/expiry, replay/patch/client timestamp, metadata removal, save failure/lost acknowledgement, clock-read corruption, competing relays, legacy/missing-clock restore, expiry during persistence and a real SIGKILL/restart followed by video-byte retrieval. `audit/reproduce-qr-video-grace.mjs` now asserts restored safe behavior. Current output: `test-results/qr-clock-video-grace.json`; unsafe prior output remains in `qr-retention-video-grace.json`.
 
+## R8 — Medium: discovery errors/in-flight work become final absence — OPEN
+
+Actual `probeForVideos` catches every HEAD exception as missing (`server.js:795–797`) and writes the in-memory `lastProbeAt` before reads/persistence finish (`775–779`). During its 20-second throttle, other reads skip discovery regardless of whether it succeeded. At the persisted video grace boundary this produces HTTP 200 with `videoPending:false`, `videoFailed:true` and no URL for an existing video, so the phone stops polling without a retry control.
+
+Actual-handler local probes demonstrate three triggers: transient HEAD 503 on warm/cold relays; failed discovery metadata save followed by immediate retry after storage recovery; and a concurrent reader during another successful in-flight probe. A later explicit fetch after throttle expiry recovers the same video. Original proof, wait clock and metadata times remain unchanged. The actual phone component confirms no automatic refetch or retry control for that false-absence payload.
+
+This is inherited server logic previously isolated away by the QR fixture's stub; it is not evidence that the new clock resets or the phone timeout fails. Required fix: only confirmed missing responses may establish absence; unreadable/in-flight/failed-save discovery must remain retryable. Do not cache/throttle failed work as a completed negative result; coordinate concurrent requests and preserve known media/clocks. Test the actual HEAD/probe/patch path, immediate retry and phone behavior, including normal true absence and final grace semantics.
+
+`audit/reproduce-video-probe-read.mjs` and `audit/phone-video-discovery.review.test.tsx` reproduce unsafe outcomes, not a fix. Evidence: `test-results/qr-clock-review-open-probe.json`, `qr-clock-review-phone-tests.txt`. Full details and corrected fixture fidelity are in [final review](FINAL-REVIEW.md).
+
 ## Proof retention and legacy adoption review
 
 The built-in backup module is unchanged and only snapshots pool prefixes. Actual-module local tests prove live `qr-expiry/v1/` and `qr-video-wait/v1/` are outside pool pruning and are not copied into snapshots; nested old snapshot keys are pruned under `backups/pool/`. Therefore a pool backup marker is not proof of QR backup completeness. An independent verified current expiry-proof/video-clock backup/restore procedure, lifecycle exclusions and permissions are required before rollout; no external backup/lifecycle was inspected or changed.
@@ -99,18 +109,19 @@ New positive cases prove cold legacy recovery after failed proof persistence or 
 
 ## Final local validation
 
-Tested implementation `d8dea04`, 2026-10-31; exact patch `75e0a3292d4a4c1e53b348bc23e851a6cec3a42b27e39cd51c8e8205283b8f5e`. Summary: `audit/qr-clock-validation.json`.
+Re-reviewed snapshot `7938e3e`, production implementation `d8dea04`, test/evidence `7056ddd`, 2026-10-31. Exact unchanged patch `75e0a3292d4a4c1e53b348bc23e851a6cec3a42b27e39cd51c8e8205283b8f5e`. Summary: `audit/qr-clock-rereview.json`.
 
-- **142 twin tests, 27 targeted kiosk tests, 15 phone tests pass.** The former R6/R7 reproducers now verify safe timeout/video-wait behavior; unsafe historical outputs remain separate. All prior slow internet, after-idle, withdrawal/duplicate, metadata/expiry and restart checks remain green. New clock restart tests serve the original video bytes after process replacement.
-- Kiosk TypeScript/full lint/build; phone TypeScript/build/component/helper lint; twin build; candidate JavaScript syntax and exact 24-file isolated patch application pass. Existing Node/chunk/import warnings remain. No production dependencies or lockfiles changed.
-- Actual handlers, client, disk/provider substitutions and SIGKILL are exercised. Chrome verifies local stalled-read recovery with synthetic media, no forms/sharing, no extra writes. Temporary preview services stopped. Full relay integrations and live provider, physical Windows/idle, Pages/Render targets remain unverified.
-- New clock data is minimal (version, identity hash, original clocks, start), outside session cleanup. Initial new QR uses three acknowledged records: expiry proof, metadata with confirmation timestamp, independent wait clock. A cold download normally reads metadata/proof/wait clock; missing proof/clock adoption adds conditional writes. Warm validated cache avoids these reads. Real cloud latency/cost/volume remains unmeasured.
-- Earlier queue scan measurement remains scoped to this Mac: 20 pending 2 MiB portraits (about 53 MiB JSON), 54/51/50 ms synchronous scans. No Windows/production benchmark.
-- Saved baseline dependency findings remain untriaged: kiosk 14 (1 critical, 11 high, 1 moderate, 1 low); relay 6 (3 high, 3 moderate). These are not fresh scans or exploitability assessments.
+- **146 twin tests, 27 targeted kiosk tests and 15 positive phone tests pass.** Three provider scenarios and one separate phone consequence probe reproduce OPEN R8; their passing assertions are evidence of unsafe behavior, not safe discovery recovery.
+- New process tests stop after metadata/before clock and after clock/before acknowledgement. The client sees disconnection; cold recovery preserves first confirmation/expiry and original photo bytes. The video restart fixture now adds bytes only after the wait assertion and exercises real orphan discovery after restart. Real `probeForVideos` runs by default in the QR fixture; earlier deliberate stubbing no longer hides this path.
+- Positive discovery tests cover confirmed missing objects around the grace boundary and successful orphan recovery with clock/expiry preservation. All existing slow/idle/withdrawal/duplicate/QR deadline/expiry/restart checks remain green.
+- Kiosk TypeScript/full lint/build, phone TypeScript/build/component/helper lint, twin build, JS syntax and exact isolated 24-file artifact checks pass. Production source/dependencies/lockfiles unchanged; existing warnings remain. No browser operation or preview service in this review.
+- Paired retention/current backup/restore, full relay startup/integrations, actual SDK/provider, Windows/hardware/power-loss/idle and Pages/Render remain unverified. Prior browser evidence covers returned failures/stalled reads and explicit recovery, not R8.
+- Earlier queue scan measurement remains Mac-only: 20 pending 2 MiB portraits (about 53 MiB JSON), 54/51/50 ms scans. Real cloud cost/latency/concurrency volume remains unmeasured. Actual discovery adds up to six HEAD requests per uncached attempt; the existing 20-second throttle is not evidence of successful probing.
+- Saved baseline dependency findings remain untriaged: kiosk 14 (1 critical, 11 high, 1 moderate, 1 low); relay 6 (3 high, 3 moderate). Not fresh scans or exploitability assessments.
 
 ## Remaining issues and release gates
 
-**R1–R7 and the kiosk deadline are closed locally within the tested scope.** Actual provider persistence, expiry-proof retention/legacy adoption and phone hosting still need staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
+**R8 needs code/recovery resolution before release. R1–R7 and the kiosk deadline remain closed locally within the tested scope.** Actual provider persistence, expiry-proof retention/legacy adoption and phone hosting still need staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
 
 **Launcher/update automation must be controlled.** `start-kiosk.bat` and `update-kiosk-auto.bat` switch a non-main/detached checkout to `main`, may stash tracked edits and pull again. A rollback to a detached SHA followed by the stock launcher is therefore not a pin. The revised rollout plan requires verified `main`/artifact alignment or an approved maintenance launcher, plus frozen automatic updates/restarts. Never run these launchers on this Mac as a rehearsal; they are Windows device/process operations.
 
@@ -120,6 +131,6 @@ Image deletion and metadata publication are not an atomic multi-object transacti
 
 The bridge queue remains single-writer, with durability beginning after local acknowledgement. Do not launch another worker against its folder, clear receipts, re-identify jobs or restore stale backups. Page closure before JPEG handoff, catastrophic disk failure and physical Windows power loss remain outside demonstrated durability. Corrupt/blocked/older-than-24h jobs retain bytes for review; no consent is renewed automatically.
 
-Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. The environment, paired-state retention/backup, dependency and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
+Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. R8 plus the environment, paired-state retention/backup, dependency and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
 
 See the [final combined review](FINAL-REVIEW.md), [protocol and failure boundaries](PUBLICATION-FENCING.md), [coverage ledger](AUDIT-COVERAGE.md) and [rollout/rollback plan](ROLLOUT-ROLLBACK.md).
