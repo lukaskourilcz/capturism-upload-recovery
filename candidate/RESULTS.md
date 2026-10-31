@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current verification is in [AUDIT.md](AUDIT.md): 126 twin tests, 27 targeted kiosk tests and 7 phone tests pass. Combined implementation `485d20a` closes QR durable acknowledgement (R3), expiry renewal after cleanup (R4), temporary-read/phone recovery (R5) and the shared timeout locally. [QR metadata details](QR-METADATA.md) include replay and real process-restart evidence. Pool-v2 fixes remain intact. Actual provider/kiosk/phone-hosting, dependency and cutover gates keep release on hold; nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe the earlier candidate, superseded by the current contracts.
+This document records the initial QR experiment. Current verification is in [AUDIT.md](AUDIT.md): 132 twin tests, 27 targeted kiosk tests and 7 positive phone tests pass. The latest [review](FINAL-REVIEW.md) of unchanged implementation `485d20a` finds R6 (stalled phone reads) and R7 (issuance-based video wait regression) OPEN, with separate unsafe reproductions. R1–R5 and the shared kiosk deadline remain covered within their tested scope. The [plan](ROLLOUT-ROLLBACK.md) requires those fixes, verified proof backup/restore and actual kiosk/cloud/dependency/cutover gates before release. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe the earlier candidate, superseded by the current contracts.
 
 ## Reproduction
 

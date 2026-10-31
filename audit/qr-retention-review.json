@@ -41,7 +41,7 @@
       "id": "R7",
       "severity": "medium",
       "file": "candidate/capturism-relay/server.js",
-      "line": 879,
+      "line": 875,
       "trigger": "9-minute initial photo upload/confirmation; inspect 2 minutes after photo confirmation",
       "baseline": {
         "videoPending": true,
