@@ -14,10 +14,12 @@ if (!fresh) {
   queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
 }
 
+let metadataSaved = false;
 const original = store.send.bind(store);
 store.send = async command => {
   const result = await original(command);
   if (command.constructor.name === 'PutObjectCommand') {
+    if (command.input.Key.endsWith('/meta.json')) metadataSaved = true;
     queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
     if (command.input.Key.endsWith('/meta.json') && process.argv[5] === 'pause-discovery-ack' && JSON.parse(command.input.Body).layoutVideoKey) {
       process.send({ phase: 'discovery-metadata-durable' }); await new Promise(() => {});
@@ -38,6 +40,9 @@ store.beforePut = async ({ Key }) => {
   if (Key.startsWith('qr-video-wait/') && process.argv[5] === 'pause-clock') {
     process.send({ phase: 'before-clock-write' }); await new Promise(() => {});
   }
+};
+store.beforeGet = async ({ Key }) => {
+  if (Key.startsWith('qr-media-authorizations/') && (process.argv[5] === 'approval-read-error' || (process.argv[5] === 'post-save-approval-error' && metadataSaved))) throw new Error('Injected approval read outage');
 };
 store.beforeHead = async () => { if (process.argv[5] === 'head-error') throw Object.assign(new Error('Storage unavailable'), { $metadata: { httpStatusCode: 503 } }); };
 const server = http.createServer((req, res) => {
