@@ -1,0 +1,59 @@
+{
+  "reviewDate": "2026-10-31",
+  "implementationCommit": "485d20a47435462a0ddc566b88cfb6be2c78d3f2",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "3c54fdc8c290fdd8a8666dd205d5d9e73aaab8e7bb0b48c62ddab98d09f345fd",
+  "matchedCandidateFiles": 23,
+  "twinTestsPassed": 126,
+  "targetedKioskTestsPassed": 27,
+  "phoneRecoveryTestsPassed": 7,
+  "kioskTypecheckLintBuild": "passed",
+  "phoneTypecheckBuildComponentLint": "passed",
+  "twinBuild": "passed",
+  "javascriptSyntaxAndExactPatch": "passed",
+  "closedLocally": [
+    "R1 withdrawn replay",
+    "R2 portrait overwrite",
+    "shared QR deadline",
+    "R3 metadata acknowledgement",
+    "R4 original expiry after cleanup",
+    "R5 retryable cold reads and phone recovery"
+  ],
+  "restartEvidence": [
+    "acknowledged QR + original photo after SIGKILL",
+    "metadata cleanup + preserved proof rejects expired replay after SIGKILL",
+    "missing photo not recreated"
+  ],
+  "browserEvidence": {
+    "result": "503 -> explicit retry -> 200 and rendered synthetic photo",
+    "storageWritesBeforeAndAfter": 2,
+    "backend": "actual candidate handler with isolated provider",
+    "screenshots": [
+      "test-results/qr-expiry-phone-retry.png",
+      "test-results/qr-expiry-phone-recovered.png"
+    ],
+    "temporaryServicesStopped": true
+  },
+  "knownLimits": [
+    "Physical Windows/restart/power loss not tested",
+    "Full relay startup and live SDK/R2 not tested",
+    "Expiry-prefix lifecycle/legacy adoption/backup not changed or verified",
+    "Actual Pages/Render environment not verified",
+    "Baseline dependency advisories untriaged",
+    "Legacy writers/capabilities and Windows launcher/updater cutover not exercised"
+  ],
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-expiry-full-tests.txt",
+    "test-results/qr-expiry-focused.txt",
+    "test-results/qr-expiry-kiosk-tests.txt",
+    "test-results/qr-expiry-phone-tests.txt",
+    "test-results/qr-expiry-after.json",
+    "test-results/qr-expiry-persistence-regression.json",
+    "test-results/qr-expiry-artifact.json",
+    "test-results/qr-expiry-browser-server.txt"
+  ]
+}
