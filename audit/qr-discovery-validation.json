@@ -1,0 +1,80 @@
+{
+  "date": "2026-10-31",
+  "implementationCommit": "001032ea0f1c98ff61a7e157c04ee5e9b3e32b62",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "9675fb069a72ba1640e266becb4b917ef537e39acd2fbe1ba7c2ac60b313dcad",
+  "matchedCandidateFiles": 24,
+  "twinTestsPassed": 164,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "dedicatedDiscoveryCases": 15,
+  "dedicatedDiscoveryProcessRestartCases": 3,
+  "closedLocally": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "shared kiosk deadline"
+  ],
+  "discovery": {
+    "unverifiedOutcome": "HTTP 503 retryable",
+    "operationDeadlineMs": 15000,
+    "negativeCacheMs": 20000,
+    "coalescing": "per relay process and token",
+    "negativeCache": "WeakMap for completed verified session result; invalidates across grace boundary",
+    "phoneReadDeadlineMs": 20000,
+    "freshDurableReads": true,
+    "clocksAndBytesPreserved": true,
+    "lateProviderWrites": "reconciled from durable state; abort is best effort"
+  },
+  "checks": {
+    "kioskTypecheckFullLintBuild": "passed",
+    "phoneTypecheckBuildComponentHelperLint": "passed",
+    "twinBuild": "passed",
+    "exactArtifactAndJavaScriptSyntax": "passed"
+  },
+  "browser": {
+    "outcome": "HEAD failure -> Try again -> same QR photo/video download links",
+    "syntheticMedia": true,
+    "storageWritesBefore": 3,
+    "storageWritesAfter": 4,
+    "mediaUploads": 0,
+    "previewServicesStopped": true,
+    "screenshots": [
+      "test-results/qr-discovery-retry.png",
+      "test-results/qr-discovery-recovered.png"
+    ]
+  },
+  "restart": [
+    "HEAD failure then fresh relay discovers original video",
+    "failed discovery save then fresh relay persists original video",
+    "SIGKILL after discovery metadata save before acknowledgement; restart reuses committed media"
+  ],
+  "remainingGates": [
+    "actual SDK/R2 conditional/abort behavior and paired retention/backup restore",
+    "full relay integration startup",
+    "Windows/hardware/power loss/real studio idle behavior",
+    "Pages/Render configuration and hosting limits",
+    "dependency disposition",
+    "controlled legacy writer/capability/launcher cutover"
+  ],
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-discovery-full-tests.txt",
+    "test-results/qr-discovery-focused.txt",
+    "test-results/qr-discovery-recovery-tests.txt",
+    "test-results/qr-discovery-restart-tests.txt",
+    "test-results/qr-discovery-phone-tests.txt",
+    "test-results/qr-discovery-kiosk-tests.txt",
+    "test-results/qr-discovery-after.json",
+    "test-results/qr-discovery-artifact.json",
+    "test-results/qr-discovery-browser-server.txt"
+  ]
+}
