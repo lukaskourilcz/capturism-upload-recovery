@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current [audit](AUDIT.md): 169 twin tests, 27 kiosk tests and 16 phone tests pass. The latest [review](FINAL-REVIEW.md) of unchanged implementation `001032e` finds OPEN R9 at media-key authorization/public reads, with separate unsafe synthetic baseline/candidate evidence. R1–R8 and the kiosk deadline remain valid, including added overlap/restart checks. The [plan](ROLLOUT-ROLLBACK.md) holds release for R9 and real kiosk/cloud/paired-state/backup/load/dependency/cutover checks. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
+This document records the initial QR experiment. Current [audit](AUDIT.md): 186 twin tests, 27 kiosk tests and 16 phone tests pass. Implementation `baf29cb` also closes R9 locally: booth media references are session-bound, public reads reject unsafe stored records, and noncanonical legacy media needs privately reviewed approval. Restart, replay and outage recovery pass. The [rollout plan](ROLLOUT-ROLLBACK.md) still requires kiosk/cloud/legacy ownership/backup/load/dependency/cutover checks. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
 
 ## Reproduction
 

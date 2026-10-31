@@ -1,0 +1,159 @@
+{
+  "date": "2026-10-31",
+  "implementationCommit": "baf29cb6a32857b61e929f224491b9ef426589f9",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "cedda4c0d6102dbf29ce7b2ec4c9406eee6792066f79277d4c6bf0f30937a65b",
+  "candidateFilesMatched": 26,
+  "twinTestsPassed": 186,
+  "focusedAuthorizationTestsPassed": 17,
+  "legacyRetentionTestsPassed": 6,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "closedLocally": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "shared kiosk deadline"
+  ],
+  "scope": "Local combined patch; real provider, full integrations and physical kiosk not verified",
+  "authorization": {
+    "newMappings": "Exact issued-token/field-specific session filenames; immutable booth/photo identity proof",
+    "writers": [
+      "HTTP confirmation",
+      "WebSocket photos_ready",
+      "dev seed",
+      "discovery patch",
+      "upload issuance"
+    ],
+    "publicSinks": [
+      "download signing",
+      "asset proxy"
+    ],
+    "legacyCanonical": "Original durable metadata/proof/wait adoption; no approval storage request",
+    "legacyNoncanonical": "Exact private manifest bound to token hash, original booth/photo identity hash, original dates and specific session-media assets; no application approval writer",
+    "otherHistoricalNaming": "Denied pending separate private reconciliation",
+    "privateApprovalPrefix": "qr-media-authorizations/v1/",
+    "revocation": "Rechecked warm/cold and before public sinks; already issued capabilities/cache/downloads cannot be recalled",
+    "approvalReadFailure": "503 retryable; missing/mismatched scope is public 404",
+    "expiry": "Rechecked after authorization and asset GET before starting stream; original clocks preserved",
+    "offlineTool": "Reviewed input to private wx/0600 file only; no upload or overwrite; ownership evidence is operator responsibility"
+  },
+  "beforeAfter": [
+    {
+      "version": "baseline",
+      "field": "videoKey",
+      "postAuthConfirmationStatus": 200,
+      "publicProxyStatus": 200,
+      "restartedPublicProxyStatus": 200,
+      "privateBytesExposed": true,
+      "targetObjectReads": 2
+    },
+    {
+      "version": "baseline",
+      "field": "layoutVideoKey",
+      "postAuthConfirmationStatus": 200,
+      "publicProxyStatus": 200,
+      "restartedPublicProxyStatus": 200,
+      "privateBytesExposed": true,
+      "targetObjectReads": 2
+    },
+    {
+      "version": "baseline",
+      "field": "storyVideoKey",
+      "postAuthConfirmationStatus": 200,
+      "publicProxyStatus": 200,
+      "restartedPublicProxyStatus": 200,
+      "privateBytesExposed": true,
+      "targetObjectReads": 2
+    },
+    {
+      "version": "candidate",
+      "field": "videoKey",
+      "postAuthConfirmationStatus": 403,
+      "publicProxyStatus": 404,
+      "restartedPublicProxyStatus": 404,
+      "privateBytesExposed": false,
+      "targetObjectReads": 0
+    },
+    {
+      "version": "candidate",
+      "field": "layoutVideoKey",
+      "postAuthConfirmationStatus": 403,
+      "publicProxyStatus": 404,
+      "restartedPublicProxyStatus": 404,
+      "privateBytesExposed": false,
+      "targetObjectReads": 0
+    },
+    {
+      "version": "candidate",
+      "field": "storyVideoKey",
+      "postAuthConfirmationStatus": 403,
+      "publicProxyStatus": 404,
+      "restartedPublicProxyStatus": 404,
+      "privateBytesExposed": false,
+      "targetObjectReads": 0
+    }
+  ],
+  "restart": {
+    "method": "Actual handlers in SIGKILL/replaced Node processes with disk-backed isolated provider; no assets reseeded",
+    "cases": [
+      "approved legacy mapping returns original photo/video bytes after restart with metadata/clocks unchanged",
+      "unapproved/revoked manifest denied after replacement",
+      "existing unsafe mappings rejected by warm/cold public proxy"
+    ]
+  },
+  "operationCounts": {
+    "approvedLegacyColdApprovalGETs": 3,
+    "approvedLegacyWarmApprovalGETs": 2,
+    "canonicalApprovalGETs": 0,
+    "canonical50Readers": {
+      "warmGETs": 6,
+      "coldGETs": 156,
+      "HEADs": 5,
+      "PUTs": 1
+    },
+    "limitation": "local counts only; initial cold hydration not coalesced; staging latency/capacity/caching remains a gate"
+  },
+  "checks": {
+    "kioskTypecheckFullLintBuild": "passed",
+    "phoneTypecheckComponentHelperLintBuild": "passed",
+    "twinBuild": "passed",
+    "exactArtifactAndJavaScriptSyntax": "passed",
+    "slowIdleReplayExpiryVideoClockDiscoveryQueueWithdrawalDuplicates": "passed"
+  },
+  "remainingGates": [
+    "private legacy source ownership/retention inventory and protected approval installation/revocation-aware restore",
+    "actual SDK/R2 ACLs/conditional/abort behavior, QR proof/wait/approval backup and lifecycle",
+    "outstanding old read/write capability and cached response review; no vulnerable writers/readers on rollback",
+    "full relay startup/scheduled integrations in isolated staging",
+    "Windows running SHA/launcher/queue/disk/hardware/real after-idle behavior",
+    "Render/Pages environment and warm/cold legacy load",
+    "baseline dependency disposition and exact-artifact release authorization"
+  ],
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "liveProviderAccess": false,
+  "browserActionsThisTurn": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-media-before-after.json",
+    "test-results/qr-media-focused-final.txt",
+    "test-results/qr-media-full-tests.txt",
+    "test-results/qr-media-kiosk-tests.txt",
+    "test-results/qr-media-phone-tests.txt",
+    "test-results/qr-media-artifact.json",
+    "test-results/qr-media-expiry-before.txt",
+    "test-results/qr-media-retention-tests.txt",
+    "test-results/qr-media-persistence.json",
+    "test-results/qr-media-expiry.json",
+    "test-results/qr-media-grace.json"
+  ],
+  "historicalReview": "audit/qr-discovery-final-rereview.json remains a record of R9 before this fix; superseded by this validation for current status"
+}
