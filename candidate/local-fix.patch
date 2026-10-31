@@ -1989,7 +1989,17 @@
  
  // ---------------------------------------------------------------------------
  // Configuration
-@@ -227,6 +228,8 @@
+@@ -74,6 +75,9 @@
+ const RATE_LIMIT_MAX = 5;
+ 
+ // Session/download token config
++const videoProbeNegatives = new WeakMap(); // Completed negatives belong only to this validated session object.
++const videoProbes = new Map(); // Per-token in-flight discovery only; entries settle within 15s.
++const VIDEO_PROBE_TIMEOUT_MS = 15_000;
+ const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+ const SIGNED_URL_TTL_S = 3600; // 1 hour
+ const SIGNED_UPLOAD_TTL_S = 300; // 5 minutes — booth must upload promptly after signing
+@@ -227,6 +231,8 @@
   * @type {Map<string, { photoKey: string, videoKey?: string, layoutVideoKey?: string, storyVideoKey?: string, boothId: string, createdAt: number, expiresAt: number }>}
   */
  const sessions = new Map();
@@ -1998,7 +2008,7 @@
  
  /**
   * Session-complete events used to compute admin stats. Persisted to R2
-@@ -287,6 +290,12 @@
+@@ -287,6 +293,12 @@
  // ---------------------------------------------------------------------------
  
  const server = http.createServer((req, res) => {
@@ -2011,7 +2021,7 @@
    const parsed = url.parse(req.url, true);
  
    // CORS headers:
-@@ -398,6 +407,11 @@
+@@ -398,6 +410,11 @@
    }
  
    // ---- l'INCONNU pool — booth side (X-Booth-Auth, via bridge proxy) ----
@@ -2023,7 +2033,7 @@
    if (parsed.pathname === "/api/booth/pool/sign-upload" && req.method === "POST") {
      const boothId = authenticateBooth(req, res);
      if (!boothId) return;
-@@ -734,27 +748,11 @@
+@@ -734,27 +751,11 @@
  /**
   * Update a session IN PLACE without resetting its clock.
   *
@@ -2054,12 +2064,112 @@
  }
  
  /**
-@@ -801,11 +799,17 @@
-   }));
-   if (Object.keys(found).length === 0) return session;
-   console.log(`[DOWNLOAD] Recovered ${Object.keys(found).length} orphaned video(s) for ${token} by probing R2`);
+@@ -767,45 +768,84 @@
+  * (write-back arrived, or there were never any videos) costs nothing.
+  */
+ async function probeForVideos(token, session) {
+-  // THROTTLE. Without this the probe runs on every poll of the download
+-  // page — every 4 s, for up to 11 minutes — and each run is up to 6 HEAD
+-  // requests to R2 (3 kinds x 2 extensions). A single session whose videos
+-  // genuinely failed would therefore fire ~1000 R2 calls on a 512 MB free
+-  // dyno, which is a self-inflicted load problem, not a recovery feature.
+-  // Held in memory only: re-probing after a relay restart is harmless, and
+-  // mirroring a timestamp to R2 every 20 s would just move the waste.
+-  const PROBE_EVERY_MS = 20_000;
+-  if (session.lastProbeAt && Date.now() - session.lastProbeAt < PROBE_EVERY_MS) {
+-    return session;
+-  }
+-  session.lastProbeAt = Date.now();
+-
+-  const CANDIDATES = [
+-    ["videoKey", "video"],
+-    ["layoutVideoKey", "layout"],
+-    ["storyVideoKey", "story"],
+-  ];
+-  const found = {};
+-  await Promise.all(CANDIDATES.map(async ([field, kind]) => {
+-    if (session[field]) return;
+-    for (const ext of ["mp4", "webm"]) {
+-      const key = `sessions/${token}/${kind}.${ext}`;
+-      try {
+-        await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+-        found[field] = key;
+-        return;
+-      } catch {
+-        // 404 for this extension — try the next, then give up quietly.
++  // Coalesce before inspecting the completed-negative cache. A pending or
++  // failed probe is never evidence that a video is absent.
++  if (videoProbes.has(token)) return videoProbes.get(token);
++  const now = Date.now(), graceEnd = session.videoWaitStartedAt + VIDEO_PENDING_GRACE_MS;
++  const checkedAt = videoProbeNegatives.get(session);
++  if (Number.isFinite(checkedAt) && now - checkedAt < 20_000 &&
++      (now < graceEnd || checkedAt >= graceEnd)) return session;
++
++  const controller = new AbortController();
++  const deadline = now + VIDEO_PROBE_TIMEOUT_MS;
++  const unavailable = () => Object.assign(new Error("Video discovery temporarily unavailable"), { status: 503, videoDiscovery: true });
++  const expired = () => Object.assign(new Error("Download session expired"), { status: 410 });
++  const check = () => {
++    if (Date.now() >= session.expiresAt) throw expired();
++    if (controller.signal.aborted || Date.now() >= deadline) throw unavailable();
++  };
++  const hasMedia = data => !!(data.videoKey || data.layoutVideoKey || data.storyVideoKey);
++  let timer;
++  const timedOut = new Promise((_, reject) => {
++    timer = setTimeout(() => { reject(Date.now() >= session.expiresAt ? expired() : unavailable()); controller.abort(); }, VIDEO_PROBE_TIMEOUT_MS);
++  });
++  const work = async () => {
++    // Reconcile other relay/worker commits, not just this request's cache.
++    let current = await sessionMetadata.load(token, { fresh: true });
++    check();
++    if (!current) throw Object.assign(new Error("Download session expired"), { status: 410 });
++    if (hasMedia(current) || !current.videosPending) return current;
++    const found = {};
++    const outcomes = await Promise.allSettled([
++      ["videoKey", "video"], ["layoutVideoKey", "layout"], ["storyVideoKey", "story"],
++    ].map(async ([field, kind]) => {
++      for (const ext of ["mp4", "webm"]) {
++        check();
++        const key = `sessions/${token}/${kind}.${ext}`;
++        try {
++          await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }), { abortSignal: controller.signal });
++          check(); found[field] = key; return;
++        } catch (err) {
++          check();
++          const status = err?.$metadata?.httpStatusCode;
++          // Only a confirmed missing response is a negative observation.
++          if (status === 404 || (status == null && ["NoSuchKey", "NotFound"].includes(err?.name))) continue;
++          throw err;
++        }
+       }
+-    }
+-  }));
+-  if (Object.keys(found).length === 0) return session;
+-  console.log(`[DOWNLOAD] Recovered ${Object.keys(found).length} orphaned video(s) for ${token} by probing R2`);
 -  return (await patchSession(token, found)) || Object.assign(session, found);
-+  return patchSession(token, found);
++    }));
++    check();
++    if (outcomes.some(result => result.status === "rejected")) throw unavailable();
++    if (Object.keys(found).length) {
++      current = await patchSession(token, found);
++      check();
++      return current;
++    }
++    // A worker may have committed metadata while HEAD requests were running.
++    current = await sessionMetadata.load(token, { fresh: true });
++    check();
++    if (!current) throw Object.assign(new Error("Download session expired"), { status: 410 });
++    if (!hasMedia(current)) videoProbeNegatives.set(current, Date.now());
++    return current;
++  };
++  const operation = Promise.race([work(), timedOut])
++    .catch(err => { if (err.status === 410) throw err; throw unavailable(); })
++    .finally(() => {
++      clearTimeout(timer); controller.abort();
++      if (videoProbes.get(token) === operation) videoProbes.delete(token);
++    });
++  videoProbes.set(token, operation);
++  return operation;
  }
  
  async function handleGetDownload(req, res, token) {
@@ -2074,7 +2184,23 @@
    if (!session) {
      return jsonResponse(res, 404, { error: "Not found or expired" });
    }
-@@ -868,7 +872,7 @@
+@@ -821,6 +861,7 @@
+     if (session.videosPending && !session.videoKey && !session.layoutVideoKey && !session.storyVideoKey) {
+       session = await probeForVideos(token, session);
+     }
++    if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
+     const photoUrl = await signR2Url(session.photoKey);
+     const videoUrl = session.videoKey ? await signR2Url(session.videoKey) : null;
+     const layoutVideoUrl = session.layoutVideoKey ? await signR2Url(session.layoutVideoKey) : null;
+@@ -842,6 +883,7 @@
+       ? await signR2Url(session.storyVideoKey, `capturism-story.${ext(session.storyVideoKey)}`)
+       : null;
+ 
++    if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
+     jsonResponse(res, 200, {
+       photoUrl,
+       videoUrl,
+@@ -868,7 +910,7 @@
          !!session.videosPending &&
          !videoUrl &&
          !layoutVideoUrl &&
@@ -2083,7 +2209,7 @@
        // Past the grace window with nothing to show: this session was
        // PROMISED a video and never got one. Say so. Until now the
        // pending row simply vanished, which a customer reads as the
-@@ -879,7 +883,7 @@
+@@ -879,11 +921,13 @@
          !videoUrl &&
          !layoutVideoUrl &&
          !storyVideoUrl &&
@@ -2092,7 +2218,13 @@
        date: new Date(session.createdAt).toISOString(),
        expiresAt: new Date(session.expiresAt).toISOString(),
      });
-@@ -901,7 +905,13 @@
+   } catch (err) {
++    if (err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
++    if (err.videoDiscovery) return jsonResponse(res, 503, { error: "Your video is temporarily unavailable. Please try again.", retryable: true });
+     console.error("[DOWNLOAD] Failed to sign URLs:", err.message);
+     jsonResponse(res, 500, { error: "Failed to generate download URLs" });
+   }
+@@ -901,7 +945,13 @@
   * possession of the token = right to read the file.
   */
  async function handleProxyAsset(req, res, token, kind) {
@@ -2107,7 +2239,7 @@
    if (!session) {
      return jsonResponse(res, 404, { error: "Not found or expired" });
    }
-@@ -1002,6 +1012,7 @@
+@@ -1002,6 +1052,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2115,7 +2247,7 @@
      const contentType = data.contentType;
      if (!contentType || !ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
        return jsonResponse(res, 400, { error: "Unsupported contentType" });
-@@ -1029,6 +1040,7 @@
+@@ -1029,6 +1080,7 @@
      if (kind && !KINDS[kind]) {
        return jsonResponse(res, 400, { error: "Unsupported kind" });
      }
@@ -2123,7 +2255,7 @@
      let token = data.token;
      if (token != null) {
        if (typeof token !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(token)) {
-@@ -1042,6 +1054,15 @@
+@@ -1042,6 +1094,15 @@
      const key = `sessions/${token}/${assetKind}.${ext}`;
  
      try {
@@ -2139,7 +2271,7 @@
        const cmd = new PutObjectCommand({
          Bucket: R2_BUCKET,
          Key: key,
-@@ -1052,7 +1073,7 @@
+@@ -1052,7 +1113,7 @@
        jsonResponse(res, 200, { token, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
      } catch (err) {
        console.error(`[BOOTH] sign-upload failed for ${boothId}:`, err.message);
@@ -2148,7 +2280,7 @@
      }
    });
  }
-@@ -1077,19 +1098,22 @@
+@@ -1077,19 +1138,22 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2179,7 +2311,7 @@
      console.log(`[BOOTH] Stored session ${token} from ${boothId} (HTTP, videos: ${[videoKey, layoutVideoKey, storyVideoKey].filter(Boolean).length})`);
  
      broadcastToAdmins({
-@@ -1097,10 +1121,10 @@
+@@ -1097,10 +1161,10 @@
        boothId,
        payload: {
          token,
@@ -2194,7 +2326,7 @@
        },
        timestamp: new Date().toISOString(),
      });
-@@ -1129,6 +1153,7 @@
+@@ -1129,6 +1193,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2202,7 +2334,7 @@
      if (data.key !== DEV_SEED_KEY) {
        return jsonResponse(res, 401, { error: "Invalid seed key" });
      }
-@@ -1136,11 +1161,11 @@
+@@ -1136,11 +1201,11 @@
        return jsonResponse(res, 400, { error: "token and photoKey required" });
      }
  
@@ -2219,7 +2351,7 @@
      console.log(`[DEV] Seeded session ${data.token} → ${data.photoKey}`);
  
      jsonResponse(res, 200, {
-@@ -1186,7 +1211,9 @@
+@@ -1186,7 +1251,9 @@
      // as "unknown booth" so we never lose customer data.
      let boothId = "unknown";
      if (token) {
@@ -2230,7 +2362,7 @@
        if (session && session.boothId) boothId = session.boothId;
      }
      const city = BOOTH_CITIES.get(boothId) || boothId;
-@@ -1463,13 +1490,11 @@
+@@ -1463,13 +1530,11 @@
          console.warn(`[BOOTH] photos_ready missing token/photoKey from ${boothId}`);
          return;
        }
@@ -2249,7 +2381,7 @@
        return;
      }
  
-@@ -1710,78 +1735,14 @@
+@@ -1710,78 +1775,14 @@
  // Helpers
  // ---------------------------------------------------------------------------
  
@@ -2335,7 +2467,7 @@
  }
  
  /**
-@@ -2129,6 +2090,8 @@
+@@ -2129,6 +2130,8 @@
  // Start
  // ---------------------------------------------------------------------------
  
@@ -2523,9 +2655,9 @@
 +      throw failure(503, 'Download metadata contention');
 +    });
 +  }
-+  async function load(token) {
++  async function load(token, { fresh = false } = {}) {
 +    keyFor(token);
-+    let data = cache.get(token);
++    let data = fresh ? null : cache.get(token);
 +    if (!data) {
 +      const stored = await read(token); data = stored?.data;
 +      if (data) {

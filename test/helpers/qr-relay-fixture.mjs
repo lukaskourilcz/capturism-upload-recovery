@@ -25,12 +25,12 @@ export function qrFunctions(source, { probeVideos = true } = {}) {
   const ws = section('    // booth:photos_ready — store token', '    // Persist session_complete');
   return code + (probeVideos ? section('async function probeForVideos(', 'async function handleGetDownload(') : '') + '\nasync function handleWsPhotosReady(msg, boothId) {\n' + ws + '\n}';
 }
-export function makeQrRelay(store, { probeVideos = true, code = candidate, boothId = 'synthetic-booth', now = Date.now, signR2Url = async key => 'http://127.0.0.1/synthetic-object/' + encodeURIComponent(key) } = {}) {
+export function makeQrRelay(store, { probeTimeoutMs = 15000, probeVideos = true, code = candidate, boothId = 'synthetic-booth', now = Date.now, signR2Url = async key => 'http://127.0.0.1/synthetic-object/' + encodeURIComponent(key) } = {}) {
   const cache = new Map(), notifications = [];
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now()])); } static now() { return now(); } }
   const context = { sessions: cache, SESSION_TTL_MS: 86400000, VIDEO_PENDING_GRACE_MS: 600000,
     R2_BUCKET: 'isolated-local-fixture', r2Client: store, ...storageCommands,
-    Buffer, crypto, Date: Clock, ALLOWED_UPLOAD_CONTENT_TYPES: new Set(['image/jpeg', 'image/png', 'video/mp4', 'video/webm']),
+    Buffer, crypto, Date: Clock, AbortController, setTimeout, clearTimeout, videoProbes: new Map(), videoProbeNegatives: new WeakMap(), VIDEO_PROBE_TIMEOUT_MS: probeTimeoutMs, ALLOWED_UPLOAD_CONTENT_TYPES: new Set(['image/jpeg', 'image/png', 'video/mp4', 'video/webm']),
     CONTENT_TYPE_EXT: { 'image/jpeg': 'jpg', 'image/png': 'png', 'video/mp4': 'mp4', 'video/webm': 'webm' }, SIGNED_UPLOAD_TTL_S: 300,
     getSignedUrl: async (_, cmd) => 'http://127.0.0.1/upload/' + encodeURIComponent(cmd.input.Key), console: { log() {}, warn() {}, error() {} }, DEV_SEED_KEY: 'synthetic',
     authenticateBooth: () => boothId, broadcastToAdmins: event => notifications.push(event),

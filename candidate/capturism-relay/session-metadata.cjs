@@ -174,9 +174,9 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
       throw failure(503, 'Download metadata contention');
     });
   }
-  async function load(token) {
+  async function load(token, { fresh = false } = {}) {
     keyFor(token);
-    let data = cache.get(token);
+    let data = fresh ? null : cache.get(token);
     if (!data) {
       const stored = await read(token); data = stored?.data;
       if (data) {

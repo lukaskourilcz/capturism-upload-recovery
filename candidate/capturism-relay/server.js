@@ -75,6 +75,9 @@ const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX = 5;
 
 // Session/download token config
+const videoProbeNegatives = new WeakMap(); // Completed negatives belong only to this validated session object.
+const videoProbes = new Map(); // Per-token in-flight discovery only; entries settle within 15s.
+const VIDEO_PROBE_TIMEOUT_MS = 15_000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const SIGNED_URL_TTL_S = 3600; // 1 hour
 const SIGNED_UPLOAD_TTL_S = 300; // 5 minutes — booth must upload promptly after signing
@@ -765,41 +768,74 @@ async function patchSession(token, patch) {
  * (write-back arrived, or there were never any videos) costs nothing.
  */
 async function probeForVideos(token, session) {
-  // THROTTLE. Without this the probe runs on every poll of the download
-  // page — every 4 s, for up to 11 minutes — and each run is up to 6 HEAD
-  // requests to R2 (3 kinds x 2 extensions). A single session whose videos
-  // genuinely failed would therefore fire ~1000 R2 calls on a 512 MB free
-  // dyno, which is a self-inflicted load problem, not a recovery feature.
-  // Held in memory only: re-probing after a relay restart is harmless, and
-  // mirroring a timestamp to R2 every 20 s would just move the waste.
-  const PROBE_EVERY_MS = 20_000;
-  if (session.lastProbeAt && Date.now() - session.lastProbeAt < PROBE_EVERY_MS) {
-    return session;
-  }
-  session.lastProbeAt = Date.now();
+  // Coalesce before inspecting the completed-negative cache. A pending or
+  // failed probe is never evidence that a video is absent.
+  if (videoProbes.has(token)) return videoProbes.get(token);
+  const now = Date.now(), graceEnd = session.videoWaitStartedAt + VIDEO_PENDING_GRACE_MS;
+  const checkedAt = videoProbeNegatives.get(session);
+  if (Number.isFinite(checkedAt) && now - checkedAt < 20_000 &&
+      (now < graceEnd || checkedAt >= graceEnd)) return session;
 
-  const CANDIDATES = [
-    ["videoKey", "video"],
-    ["layoutVideoKey", "layout"],
-    ["storyVideoKey", "story"],
-  ];
-  const found = {};
-  await Promise.all(CANDIDATES.map(async ([field, kind]) => {
-    if (session[field]) return;
-    for (const ext of ["mp4", "webm"]) {
-      const key = `sessions/${token}/${kind}.${ext}`;
-      try {
-        await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-        found[field] = key;
-        return;
-      } catch {
-        // 404 for this extension — try the next, then give up quietly.
+  const controller = new AbortController();
+  const deadline = now + VIDEO_PROBE_TIMEOUT_MS;
+  const unavailable = () => Object.assign(new Error("Video discovery temporarily unavailable"), { status: 503, videoDiscovery: true });
+  const expired = () => Object.assign(new Error("Download session expired"), { status: 410 });
+  const check = () => {
+    if (Date.now() >= session.expiresAt) throw expired();
+    if (controller.signal.aborted || Date.now() >= deadline) throw unavailable();
+  };
+  const hasMedia = data => !!(data.videoKey || data.layoutVideoKey || data.storyVideoKey);
+  let timer;
+  const timedOut = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(Date.now() >= session.expiresAt ? expired() : unavailable()); controller.abort(); }, VIDEO_PROBE_TIMEOUT_MS);
+  });
+  const work = async () => {
+    // Reconcile other relay/worker commits, not just this request's cache.
+    let current = await sessionMetadata.load(token, { fresh: true });
+    check();
+    if (!current) throw Object.assign(new Error("Download session expired"), { status: 410 });
+    if (hasMedia(current) || !current.videosPending) return current;
+    const found = {};
+    const outcomes = await Promise.allSettled([
+      ["videoKey", "video"], ["layoutVideoKey", "layout"], ["storyVideoKey", "story"],
+    ].map(async ([field, kind]) => {
+      for (const ext of ["mp4", "webm"]) {
+        check();
+        const key = `sessions/${token}/${kind}.${ext}`;
+        try {
+          await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }), { abortSignal: controller.signal });
+          check(); found[field] = key; return;
+        } catch (err) {
+          check();
+          const status = err?.$metadata?.httpStatusCode;
+          // Only a confirmed missing response is a negative observation.
+          if (status === 404 || (status == null && ["NoSuchKey", "NotFound"].includes(err?.name))) continue;
+          throw err;
+        }
       }
+    }));
+    check();
+    if (outcomes.some(result => result.status === "rejected")) throw unavailable();
+    if (Object.keys(found).length) {
+      current = await patchSession(token, found);
+      check();
+      return current;
     }
-  }));
-  if (Object.keys(found).length === 0) return session;
-  console.log(`[DOWNLOAD] Recovered ${Object.keys(found).length} orphaned video(s) for ${token} by probing R2`);
-  return patchSession(token, found);
+    // A worker may have committed metadata while HEAD requests were running.
+    current = await sessionMetadata.load(token, { fresh: true });
+    check();
+    if (!current) throw Object.assign(new Error("Download session expired"), { status: 410 });
+    if (!hasMedia(current)) videoProbeNegatives.set(current, Date.now());
+    return current;
+  };
+  const operation = Promise.race([work(), timedOut])
+    .catch(err => { if (err.status === 410) throw err; throw unavailable(); })
+    .finally(() => {
+      clearTimeout(timer); controller.abort();
+      if (videoProbes.get(token) === operation) videoProbes.delete(token);
+    });
+  videoProbes.set(token, operation);
+  return operation;
 }
 
 async function handleGetDownload(req, res, token) {
@@ -825,6 +861,7 @@ async function handleGetDownload(req, res, token) {
     if (session.videosPending && !session.videoKey && !session.layoutVideoKey && !session.storyVideoKey) {
       session = await probeForVideos(token, session);
     }
+    if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
     const photoUrl = await signR2Url(session.photoKey);
     const videoUrl = session.videoKey ? await signR2Url(session.videoKey) : null;
     const layoutVideoUrl = session.layoutVideoKey ? await signR2Url(session.layoutVideoKey) : null;
@@ -846,6 +883,7 @@ async function handleGetDownload(req, res, token) {
       ? await signR2Url(session.storyVideoKey, `capturism-story.${ext(session.storyVideoKey)}`)
       : null;
 
+    if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
     jsonResponse(res, 200, {
       photoUrl,
       videoUrl,
@@ -888,6 +926,8 @@ async function handleGetDownload(req, res, token) {
       expiresAt: new Date(session.expiresAt).toISOString(),
     });
   } catch (err) {
+    if (err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
+    if (err.videoDiscovery) return jsonResponse(res, 503, { error: "Your video is temporarily unavailable. Please try again.", retryable: true });
     console.error("[DOWNLOAD] Failed to sign URLs:", err.message);
     jsonResponse(res, 500, { error: "Failed to generate download URLs" });
   }
