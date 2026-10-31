@@ -842,7 +842,7 @@ async function handleGetDownload(req, res, token) {
   let session;
   try { session = await loadSession(token); }
   catch (err) {
-    if (err.status === 400) return jsonResponse(res, 404, { error: "Not found or expired" });
+    if (err.status === 400 || err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
     console.error("[DOWNLOAD] Session metadata temporarily unavailable");
     return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
   }
@@ -862,6 +862,7 @@ async function handleGetDownload(req, res, token) {
       session = await probeForVideos(token, session);
     }
     if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
+    await sessionMetadata.authorize(token, session);
     const photoUrl = await signR2Url(session.photoKey);
     const videoUrl = session.videoKey ? await signR2Url(session.videoKey) : null;
     const layoutVideoUrl = session.layoutVideoKey ? await signR2Url(session.layoutVideoKey) : null;
@@ -926,7 +927,8 @@ async function handleGetDownload(req, res, token) {
       expiresAt: new Date(session.expiresAt).toISOString(),
     });
   } catch (err) {
-    if (err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
+    if (err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
+    if (err.mediaAuthorization) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
     if (err.videoDiscovery) return jsonResponse(res, 503, { error: "Your video is temporarily unavailable. Please try again.", retryable: true });
     console.error("[DOWNLOAD] Failed to sign URLs:", err.message);
     jsonResponse(res, 500, { error: "Failed to generate download URLs" });
@@ -948,7 +950,7 @@ async function handleProxyAsset(req, res, token, kind) {
   let session;
   try { session = await loadSession(token); }
   catch (err) {
-    if (err.status === 400) return jsonResponse(res, 404, { error: "Not found or expired" });
+    if (err.status === 400 || err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
     console.error("[DOWNLOAD] Session metadata temporarily unavailable");
     return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
   }
@@ -971,6 +973,7 @@ async function handleProxyAsset(req, res, token, kind) {
   }
 
   try {
+    await sessionMetadata.authorize(token, session);
     const r = await r2Client.send(new GetObjectCommand({
       Bucket: R2_BUCKET,
       Key: key,
@@ -995,7 +998,9 @@ async function handleProxyAsset(req, res, token, kind) {
       try { res.destroy(); } catch {}
     });
   } catch (err) {
-    console.error(`[PROXY] Failed for ${key}: ${err.message}`);
+    if (err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
+    if (err.mediaAuthorization) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
+    console.error("[PROXY] Asset temporarily unavailable");
     if (!res.headersSent) {
       jsonResponse(res, 500, { error: "Could not fetch asset" });
     }
@@ -1092,6 +1097,7 @@ function handleSignUpload(req, res) {
     }
     const assetKind = kind || (contentType.startsWith("video/") ? "video" : "photo");
     const key = `sessions/${token}/${assetKind}.${ext}`;
+    if ((assetKind === "photo") !== contentType.startsWith("image/")) return jsonResponse(res, 400, { error: "Media kind and contentType do not match" });
 
     try {
       // Persist expiry BEFORE granting an upload capability. Re-signing videos
@@ -1113,7 +1119,7 @@ function handleSignUpload(req, res) {
       jsonResponse(res, 200, { token, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
     } catch (err) {
       console.error(`[BOOTH] sign-upload failed for ${boothId}:`, err.message);
-      jsonResponse(res, [400, 409, 410].includes(err.status) ? err.status : 503, { error: "Could not prepare upload. Please try again." });
+      jsonResponse(res, [400, 403, 409, 410].includes(err.status) ? err.status : 503, { error: "Could not prepare upload. Please try again." });
     }
   });
 }
@@ -1151,7 +1157,7 @@ function handlePhotosReady(req, res) {
       // An unknown provider outcome is retryable with the same token. Never
       // acknowledge or broadcast an in-memory-only download session.
       if (res.destroyed || res.writableEnded) return;
-      const status = [400,409,410].includes(err.status) ? err.status : 503;
+      const status = [400,403,409,410].includes(err.status) ? err.status : 503;
       return jsonResponse(res, status, { error: status === 503 ? "Download metadata not confirmed; retry with the same token" : "Download confirmation rejected" });
     }
     console.log(`[BOOTH] Stored session ${token} from ${boothId} (HTTP, videos: ${[videoKey, layoutVideoKey, storyVideoKey].filter(Boolean).length})`);
@@ -1204,7 +1210,7 @@ function handleDevSeed(req, res) {
     try {
       await storeSession(data.token, { photoKey: data.photoKey, videoKey: data.videoKey, boothId: data.boothId || "dev-seed" });
     } catch (err) {
-      return jsonResponse(res, [400,409,410].includes(err.status) ? err.status : 503, { error: "Seed metadata not confirmed" });
+      return jsonResponse(res, [400,403,409,410].includes(err.status) ? err.status : 503, { error: "Seed metadata not confirmed" });
     }
     console.log(`[DEV] Seeded session ${data.token} → ${data.photoKey}`);
 

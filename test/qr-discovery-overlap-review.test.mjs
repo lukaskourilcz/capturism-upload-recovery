@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { storage } from './helpers/relay-fixture.mjs';
-import { makeQrRelay, TOKEN, BODY } from './helpers/qr-relay-fixture.mjs';
+import { approveLegacy, makeQrRelay, TOKEN, BODY } from './helpers/qr-relay-fixture.mjs';
 const META = `sessions/${TOKEN}/meta.json`, VIDEO = `sessions/${TOKEN}/layout.mp4`;
 async function setup() {
   const store = storage(); let clock = 1000000;
@@ -14,7 +14,8 @@ test('a second relay commit during an absent HEAD scan is returned instead of fi
   const started = new Promise(r => { entered = r; }), gate = new Promise(r => { release = r; });
   store.beforeHead = async () => { entered(); await gate; };
   const request = relay.download(TOKEN); await started;
-  const key = 'historical/late-layout.webm'; store.objects.set(key, Buffer.alloc(16, 8));
+  const key = 'sessions/legacy-session/layout.webm'; store.objects.set(key, Buffer.alloc(16, 8));
+  approveLegacy(store, TOKEN, { ...JSON.parse(store.objects.get(META)), layoutVideoKey: key });
   const other = makeQrRelay(store, opts); assert.equal((await other.confirm({ ...BODY, videosPending: true, layoutVideoKey: key })).status, 200);
   release(); const result = await request;
   assert.equal(result.status, 200); assert.equal(result.body.videoFailed, false); assert.ok(result.body.layoutVideoUrl.includes(encodeURIComponent(key)));

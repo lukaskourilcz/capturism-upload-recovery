@@ -50,7 +50,7 @@ test('unknown tokens and partial restores without expiry or metadata cannot esta
 
 test('legacy metadata is anchored with its exact original identity and clocks before recovery', async () => {
   const store = storage(); let clock = 2000000;
-  const old = { photoKey: PHOTO, boothId: 'synthetic-booth', createdAt: 1000000, expiresAt: 87400000, storyVideoKey: 'legacy/story.mp4' };
+  const old = { photoKey: PHOTO, boothId: 'synthetic-booth', createdAt: 1000000, expiresAt: 87400000, storyVideoKey: `sessions/${TOKEN}/story.mp4` };
   store.objects.set(KEY, JSON.stringify(old)); const relay = makeQrRelay(store, { now: () => clock });
   assert.equal((await relay.download(TOKEN)).status, 200);
   const proof = JSON.parse(store.objects.get(EXPIRY)); assert.equal(proof.createdAt, old.createdAt); assert.equal(proof.expiresAt, old.expiresAt);

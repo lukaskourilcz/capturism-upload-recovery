@@ -108,8 +108,8 @@ test('stale warm relay reconciles a photo replay from durable media without rene
 test('conflicting photo, booth or completed video identity cannot overwrite a committed session', async () => {
   const store = storage(), relay = makeQrRelay(store); await relay.issue(); await relay.confirm({ ...BODY, layoutVideoKey: `sessions/${TOKEN}/layout.mp4` });
   const original = saved(store);
-  assert.equal((await relay.confirm({ ...BODY, photoKey: 'different-photo' })).status, 409);
-  assert.equal((await relay.confirm({ ...BODY, layoutVideoKey: 'different-video' })).status, 409);
+  assert.equal((await relay.confirm({ ...BODY, photoKey: `sessions/${TOKEN}/photo.png` })).status, 409);
+  assert.equal((await relay.confirm({ ...BODY, layoutVideoKey: `sessions/${TOKEN}/layout.webm` })).status, 409);
   assert.equal((await makeQrRelay(store, { boothId: 'another-booth' }).confirm(BODY)).status, 409);
   assert.deepEqual(saved(store), original); assert.equal(store.writes, 3);
 });

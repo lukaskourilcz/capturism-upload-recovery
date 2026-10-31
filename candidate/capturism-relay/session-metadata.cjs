@@ -1,5 +1,6 @@
 'use strict';
 const { createHash } = require('node:crypto');
+const mediaScope = require('./qr-media-scope.cjs');
 
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const missing = err => err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404;
@@ -41,6 +42,12 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
     } catch (err) { if (missing(err)) return null; throw err; }
   }
   const read = token => readObject(keyFor(token), validate);
+  const authorize = (token, data) => mediaScope.authorize(token, data, async key => (await readObject(key, () => {}))?.data);
+  const ensureAuthorized = async (token, data) => {
+    keyFor(token); validate(data);
+    if (data.expiresAt <= now()) throw failure(410, 'Download session expired');
+    await authorize(token, data);
+  };
   const hash = value => createHash('sha256').update(value).digest('hex');
   const identity = data => hash(JSON.stringify([data.boothId, data.photoKey]));
   const expiryKey = token => { keyFor(token); return `qr-expiry/v1/${hash(token)}.json`; };
@@ -82,8 +89,11 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
   async function issue(token, input, { fresh = false } = {}) {
     keyFor(token);
     if (!input || !validKey(input.photoKey) || typeof input.boothId !== 'string' || !input.boothId) throw failure(400, 'Invalid photo identity');
+    mediaScope.assertAsset('photoKey', input.photoKey);
+    if (fresh && !mediaScope.canonical(token, 'photoKey', input.photoKey)) throw failure(403, 'Download media not authorized');
     return exclusive(token, async () => {
       const old = (await read(token))?.data;
+      if (old) await ensureAuthorized(token, old);
       const proof = await authority(token, old, fresh ? input : null);
       live(token, proof);
       if (identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
@@ -125,11 +135,13 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
     for (const field of MEDIA) if (input[field] != null && input[field] !== '' && !validKey(input[field])) throw failure(400, 'Invalid media key');
     if (!patchOnly && (!validKey(input.photoKey) || typeof input.boothId !== 'string' || !input.boothId)) throw failure(400, 'Invalid photo identity');
     if (input.videosPending !== undefined && typeof input.videosPending !== 'boolean') throw failure(400, 'Invalid video state');
+    for (const field of mediaScope.FIELDS) if (input[field] != null && input[field] !== '') mediaScope.assertAsset(field, input[field]);
     return exclusive(token, async () => {
       // Always read durable state after locking. A warm cache cannot prove
       // that a previous writer saved, or that another relay has not updated it.
       for (let attempt = 0; attempt < 5; attempt++) {
         const stored = await read(token), old = stored?.data;
+        if (old) await ensureAuthorized(token, old);
         const proof = await authority(token, old);
         live(token, proof);
         if (!patchOnly && identity(input) !== proof.identityHash) throw failure(409, 'Download identity conflict');
@@ -153,6 +165,7 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
         // or restart the original waiting/retention clocks.
         if (input.videosPending === true) next.videosPending = true;
         validate(next);
+        await authorize(token, next);
         if (!old || JSON.stringify(next) !== JSON.stringify(old)) {
           try {
             await client.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(token), Body: JSON.stringify(next), ContentType: 'application/json',
@@ -180,6 +193,8 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
     if (!data) {
       const stored = await read(token); data = stored?.data;
       if (data) {
+        if (data.expiresAt <= now()) { cache.delete(token); return null; }
+        await authorize(token, data);
         const proof = await authority(token, data);
         if (!proof || proof.expiresAt <= now()) return null;
         const savedClock = await videoClock(token, proof);
@@ -189,8 +204,9 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
       }
     }
     if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
+    await authorize(token, data);
     cache.set(token, data); return data;
   }
-  return { issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
+  return { authorize: ensureAuthorized, issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
 }
 module.exports = { createSessionMetadataStore };

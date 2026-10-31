@@ -4,15 +4,15 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { storage, storageCommands } from './helpers/relay-fixture.mjs';
-import { makeQrRelay, TOKEN, PHOTO, BODY } from './helpers/qr-relay-fixture.mjs';
+import { approveLegacy, makeQrRelay, TOKEN, PHOTO, BODY } from './helpers/qr-relay-fixture.mjs';
 const KEY = `sessions/${TOKEN}/meta.json`;
 const PROOF = `qr-expiry/v1/${createHash('sha256').update(TOKEN).digest('hex')}.json`;
 const WAIT = PROOF.replace('qr-expiry/', 'qr-video-wait/');
 const NOW = 2000000;
 const legacy = { photoKey: PHOTO, boothId: 'synthetic-booth', createdAt: 1000000, expiresAt: 87400000,
-  layoutVideoKey: 'historical/random-layout.mp4', historicalField: 'preserve' };
+  layoutVideoKey: 'sessions/legacy-session/layout.mp4', historicalField: 'preserve' };
 const options = { now: () => NOW };
-const seed = (record = legacy) => { const store = storage(); store.objects.set(KEY, JSON.stringify(record)); return store; };
+const seed = (record = legacy) => { const store = storage(); store.objects.set(KEY, JSON.stringify(record)); approveLegacy(store, TOKEN, record); return store; };
 
 test('legacy adoption save failure preserves original metadata and cold retry keeps original expiry', async () => {
   const store = seed(), bytes = store.objects.get(KEY), first = makeQrRelay(store, options); store.failWrites = 1;
@@ -42,7 +42,7 @@ test('two cold relays adopt legacy metadata once and retain video/history fields
 });
 
 test('legacy noncanonical photo keys still permit video signing and replay with original identity', async () => {
-  const original = { ...legacy, photoKey: 'historical/photo-from-another-prefix.jpeg' }, store = seed(original);
+  const original = { ...legacy, photoKey: 'sessions/legacy-session/photo.jpeg' }, store = seed(original);
   const relay = makeQrRelay(store, options);
   assert.equal((await relay.sign({ token: TOKEN, kind: 'video', contentType: 'video/mp4' })).status, 200);
   assert.equal((await relay.confirm({ ...BODY, photoKey: original.photoKey })).status, 200);

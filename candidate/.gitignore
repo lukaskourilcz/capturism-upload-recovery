@@ -93,3 +93,6 @@ video-queue/
 # Durable pool portraits and private local diagnostic events.
 pool-queue/
 diagnostic-logs/
+
+# Private, reviewed QR media approvals; never commit customer mappings.
+qr-media-approvals/

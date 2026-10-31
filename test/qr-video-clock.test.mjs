@@ -60,19 +60,19 @@ test('lost clock acknowledgement and failed metadata save retain the same clock 
   assert.ok(wait); assert.equal(store.objects.has(META), true); assert.equal(relay.cache.size, 0);
   store.beforePut = async ({ Key }) => { if (Key === META && failMeta) throw new Error('Metadata unavailable'); };
   clock += MINUTE;
-  assert.equal((await makeQrRelay(store, opts).confirm({ ...pending, layoutVideoKey: 'layout.mp4' })).status, 503); assert.equal(store.objects.get(WAIT), wait);
+  assert.equal((await makeQrRelay(store, opts).confirm({ ...pending, layoutVideoKey: `sessions/${TOKEN}/layout.mp4` })).status, 503); assert.equal(store.objects.get(WAIT), wait);
   failMeta = false; clock += MINUTE;
-  assert.equal((await makeQrRelay(store, opts).confirm({ ...pending, layoutVideoKey: 'layout.mp4' })).status, 200);
+  assert.equal((await makeQrRelay(store, opts).confirm({ ...pending, layoutVideoKey: `sessions/${TOKEN}/layout.mp4` })).status, 200);
   assert.equal(store.objects.get(WAIT), wait); assert.equal(store.writes, 4);
 });
 
 test('competing first confirmations share one clock and preserve both completed video fields', async () => {
   const store = storage(), first = makeQrRelay(store, { now: () => START }), second = makeQrRelay(store, { now: () => START + 5000 });
   await first.issue();
-  const results = await Promise.all([first.confirm({ ...pending, layoutVideoKey: 'layout.mp4' }), second.confirm({ ...pending, storyVideoKey: 'story.mp4' })]);
+  const results = await Promise.all([first.confirm({ ...pending, layoutVideoKey: `sessions/${TOKEN}/layout.mp4` }), second.confirm({ ...pending, storyVideoKey: `sessions/${TOKEN}/story.mp4` })]);
   assert.deepEqual(results.map(r => r.status), [200,200]);
   const wait = JSON.parse(store.objects.get(WAIT)); assert.ok([START, START + 5000].includes(wait.startedAt));
-  const meta = JSON.parse(store.objects.get(META)); assert.equal(meta.layoutVideoKey, 'layout.mp4'); assert.equal(meta.storyVideoKey, 'story.mp4');
+  const meta = JSON.parse(store.objects.get(META)); assert.equal(meta.layoutVideoKey, `sessions/${TOKEN}/layout.mp4`); assert.equal(meta.storyVideoKey, `sessions/${TOKEN}/story.mp4`);
   assert.equal(first.cache.get(TOKEN).videoWaitStartedAt, second.cache.get(TOKEN).videoWaitStartedAt);
 });
 
