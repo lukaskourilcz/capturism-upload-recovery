@@ -196,26 +196,46 @@ function createSessionMetadataStore({ client, bucket, commands, cache, ttlMs, no
       throw failure(503, 'Download metadata contention');
     });
   }
-  async function load(token, { fresh = false } = {}) {
+  async function resolveAuthorized(token, data) {
+    try { await ensureAuthorized(token, data); return data; }
+    catch (err) { if (err.status !== 403) throw err; }
+    // Denial may describe an old snapshot, not the current durable mapping.
+    // Never reuse it if refresh fails, and never recursively refresh a denial
+    // of the fresh record. Keep a concurrent writer's newer cache entry intact.
+    if (cache.get(token) === data) cache.delete(token);
+    try { return await load(token, { fresh: true, expected: data }); }
+    catch (err) {
+      if ([400, 403, 410].includes(err.status)) throw err;
+      throw Object.assign(failure(503, 'Download session temporarily unavailable'), { sessionRead: true });
+    }
+  }
+  async function load(token, { fresh = false, expected } = {}) {
     keyFor(token);
     let data = fresh ? null : cache.get(token);
+    if (data) {
+      if (data.expiresAt <= now()) { cache.delete(token); return null; }
+      return resolveAuthorized(token, data);
+    }
     if (!data) {
       const stored = await read(token); data = stored?.data;
       if (data) {
         if (data.expiresAt <= now()) { cache.delete(token); return null; }
+        if (expected && (identity(data) !== identity(expected) || data.createdAt !== expected.createdAt || data.expiresAt !== expected.expiresAt)) throw failure(503, 'Download recovery identity or expiry conflict');
         await authorize(token, data);
         const proof = await authority(token, data);
         if (!proof || proof.expiresAt <= now()) return null;
         const savedClock = await videoClock(token, proof);
         const startedAt = savedClock ?? data.videoWaitStartedAt ?? data.createdAt;
         if (data.videoWaitStartedAt !== undefined && data.videoWaitStartedAt !== startedAt) throw failure(503, 'Video wait clock conflict');
+        if (expected?.videoWaitStartedAt !== undefined && expected.videoWaitStartedAt !== startedAt) throw failure(503, 'Video wait recovery conflict');
         data = { ...data, videoWaitStartedAt: savedClock ?? await videoClock(token, proof, startedAt) };
       }
     }
     if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
     await authorize(token, data);
+    if (data.expiresAt <= now()) { cache.delete(token); return null; }
     cache.set(token, data); return data;
   }
-  return { authorize: ensureAuthorized, issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
+  return { authorize: ensureAuthorized, resolveAuthorized, issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
 }
 module.exports = { createSessionMetadataStore };

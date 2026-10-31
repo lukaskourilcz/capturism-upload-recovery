@@ -862,7 +862,8 @@ async function handleGetDownload(req, res, token) {
       session = await probeForVideos(token, session);
     }
     if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
-    await sessionMetadata.authorize(token, session);
+    session = await sessionMetadata.resolveAuthorized(token, session);
+    if (!session) return jsonResponse(res, 404, { error: "Not found or expired" });
     const photoUrl = await signR2Url(session.photoKey);
     const videoUrl = session.videoKey ? await signR2Url(session.videoKey) : null;
     const layoutVideoUrl = session.layoutVideoKey ? await signR2Url(session.layoutVideoKey) : null;
@@ -928,7 +929,7 @@ async function handleGetDownload(req, res, token) {
     });
   } catch (err) {
     if (err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
-    if (err.mediaAuthorization) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
+    if (err.mediaAuthorization || err.sessionRead) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
     if (err.videoDiscovery) return jsonResponse(res, 503, { error: "Your video is temporarily unavailable. Please try again.", retryable: true });
     console.error("[DOWNLOAD] Failed to sign URLs:", err.message);
     jsonResponse(res, 500, { error: "Failed to generate download URLs" });
@@ -961,19 +962,14 @@ async function handleProxyAsset(req, res, token, kind) {
     return jsonResponse(res, 500, { error: "Storage not configured" });
   }
 
-  const keyByKind = {
-    photo: session.photoKey,
-    video: session.videoKey,
-    layout: session.layoutVideoKey,
-    story: session.storyVideoKey,
-  };
-  const key = keyByKind[kind];
-  if (!key) {
-    return jsonResponse(res, 404, { error: `No ${kind} in this session` });
-  }
-
   try {
-    await sessionMetadata.authorize(token, session);
+    session = await sessionMetadata.resolveAuthorized(token, session);
+    if (!session) return jsonResponse(res, 404, { error: "Not found or expired" });
+    // Select only from the authorized result: a refreshed mapping may have
+    // removed the legacy video key that this request initially loaded.
+    const key = { photo: session.photoKey, video: session.videoKey,
+      layout: session.layoutVideoKey, story: session.storyVideoKey }[kind];
+    if (!key) return jsonResponse(res, 404, { error: `No ${kind} in this session` });
     const r = await r2Client.send(new GetObjectCommand({
       Bucket: R2_BUCKET,
       Key: key,
@@ -1004,7 +1000,7 @@ async function handleProxyAsset(req, res, token, kind) {
     });
   } catch (err) {
     if (err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
-    if (err.mediaAuthorization) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
+    if (err.mediaAuthorization || err.sessionRead) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
     console.error("[PROXY] Asset temporarily unavailable");
     if (!res.headersSent) {
       jsonResponse(res, 500, { error: "Could not fetch asset" });

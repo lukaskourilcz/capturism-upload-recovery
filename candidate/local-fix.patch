@@ -2274,16 +2274,17 @@
    if (!session) {
      return jsonResponse(res, 404, { error: "Not found or expired" });
    }
-@@ -821,6 +861,8 @@
+@@ -821,6 +861,9 @@
      if (session.videosPending && !session.videoKey && !session.layoutVideoKey && !session.storyVideoKey) {
        session = await probeForVideos(token, session);
      }
 +    if (session.expiresAt <= Date.now()) return jsonResponse(res, 404, { error: "Not found or expired" });
-+    await sessionMetadata.authorize(token, session);
++    session = await sessionMetadata.resolveAuthorized(token, session);
++    if (!session) return jsonResponse(res, 404, { error: "Not found or expired" });
      const photoUrl = await signR2Url(session.photoKey);
      const videoUrl = session.videoKey ? await signR2Url(session.videoKey) : null;
      const layoutVideoUrl = session.layoutVideoKey ? await signR2Url(session.layoutVideoKey) : null;
-@@ -842,6 +884,7 @@
+@@ -842,6 +885,7 @@
        ? await signR2Url(session.storyVideoKey, `capturism-story.${ext(session.storyVideoKey)}`)
        : null;
  
@@ -2291,7 +2292,7 @@
      jsonResponse(res, 200, {
        photoUrl,
        videoUrl,
-@@ -868,7 +911,7 @@
+@@ -868,7 +912,7 @@
          !!session.videosPending &&
          !videoUrl &&
          !layoutVideoUrl &&
@@ -2300,7 +2301,7 @@
        // Past the grace window with nothing to show: this session was
        // PROMISED a video and never got one. Say so. Until now the
        // pending row simply vanished, which a customer reads as the
-@@ -879,11 +922,14 @@
+@@ -879,11 +923,14 @@
          !videoUrl &&
          !layoutVideoUrl &&
          !storyVideoUrl &&
@@ -2311,12 +2312,12 @@
      });
    } catch (err) {
 +    if (err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
-+    if (err.mediaAuthorization) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
++    if (err.mediaAuthorization || err.sessionRead) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
 +    if (err.videoDiscovery) return jsonResponse(res, 503, { error: "Your video is temporarily unavailable. Please try again.", retryable: true });
      console.error("[DOWNLOAD] Failed to sign URLs:", err.message);
      jsonResponse(res, 500, { error: "Failed to generate download URLs" });
    }
-@@ -901,7 +947,13 @@
+@@ -901,7 +948,13 @@
   * possession of the token = right to read the file.
   */
  async function handleProxyAsset(req, res, token, kind) {
@@ -2331,11 +2332,29 @@
    if (!session) {
      return jsonResponse(res, 404, { error: "Not found or expired" });
    }
-@@ -921,10 +973,16 @@
+@@ -909,22 +962,23 @@
+     return jsonResponse(res, 500, { error: "Storage not configured" });
    }
  
+-  const keyByKind = {
+-    photo: session.photoKey,
+-    video: session.videoKey,
+-    layout: session.layoutVideoKey,
+-    story: session.storyVideoKey,
+-  };
+-  const key = keyByKind[kind];
+-  if (!key) {
+-    return jsonResponse(res, 404, { error: `No ${kind} in this session` });
+-  }
+-
    try {
-+    await sessionMetadata.authorize(token, session);
++    session = await sessionMetadata.resolveAuthorized(token, session);
++    if (!session) return jsonResponse(res, 404, { error: "Not found or expired" });
++    // Select only from the authorized result: a refreshed mapping may have
++    // removed the legacy video key that this request initially loaded.
++    const key = { photo: session.photoKey, video: session.videoKey,
++      layout: session.layoutVideoKey, story: session.storyVideoKey }[kind];
++    if (!key) return jsonResponse(res, 404, { error: `No ${kind} in this session` });
      const r = await r2Client.send(new GetObjectCommand({
        Bucket: R2_BUCKET,
        Key: key,
@@ -2348,18 +2367,18 @@
  
      // Forward content-type so the browser knows what kind of file it's
      // receiving. Default to a sensible MIME if R2 didn't return one.
-@@ -945,7 +1003,9 @@
+@@ -945,7 +999,9 @@
        try { res.destroy(); } catch {}
      });
    } catch (err) {
 -    console.error(`[PROXY] Failed for ${key}: ${err.message}`);
 +    if (err.status === 403 || err.status === 410) return jsonResponse(res, 404, { error: "Not found or expired" });
-+    if (err.mediaAuthorization) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
++    if (err.mediaAuthorization || err.sessionRead) return jsonResponse(res, 503, { error: "Photos are temporarily unavailable. Please try again.", retryable: true });
 +    console.error("[PROXY] Asset temporarily unavailable");
      if (!res.headersSent) {
        jsonResponse(res, 500, { error: "Could not fetch asset" });
      }
-@@ -1002,6 +1062,7 @@
+@@ -1002,6 +1058,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2367,7 +2386,7 @@
      const contentType = data.contentType;
      if (!contentType || !ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
        return jsonResponse(res, 400, { error: "Unsupported contentType" });
-@@ -1026,9 +1087,10 @@
+@@ -1026,9 +1083,10 @@
      // Whitelist, never interpolate caller input into a key: `kind` and
      // `token` both land in an R2 path.
      const KINDS = { photo: 1, video: 1, layout: 1, story: 1 };
@@ -2379,7 +2398,7 @@
      let token = data.token;
      if (token != null) {
        if (typeof token !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(token)) {
-@@ -1040,8 +1102,18 @@
+@@ -1040,8 +1098,18 @@
      }
      const assetKind = kind || (contentType.startsWith("video/") ? "video" : "photo");
      const key = `sessions/${token}/${assetKind}.${ext}`;
@@ -2398,7 +2417,7 @@
        const cmd = new PutObjectCommand({
          Bucket: R2_BUCKET,
          Key: key,
-@@ -1052,7 +1124,7 @@
+@@ -1052,7 +1120,7 @@
        jsonResponse(res, 200, { token, key, uploadUrl, expiresIn: SIGNED_UPLOAD_TTL_S });
      } catch (err) {
        console.error(`[BOOTH] sign-upload failed for ${boothId}:`, err.message);
@@ -2407,7 +2426,7 @@
      }
    });
  }
-@@ -1077,19 +1149,22 @@
+@@ -1077,19 +1145,22 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2438,7 +2457,7 @@
      console.log(`[BOOTH] Stored session ${token} from ${boothId} (HTTP, videos: ${[videoKey, layoutVideoKey, storyVideoKey].filter(Boolean).length})`);
  
      broadcastToAdmins({
-@@ -1097,10 +1172,10 @@
+@@ -1097,10 +1168,10 @@
        boothId,
        payload: {
          token,
@@ -2453,7 +2472,7 @@
        },
        timestamp: new Date().toISOString(),
      });
-@@ -1129,6 +1204,7 @@
+@@ -1129,6 +1200,7 @@
        return jsonResponse(res, 400, { error: "Invalid JSON" });
      }
  
@@ -2461,7 +2480,7 @@
      if (data.key !== DEV_SEED_KEY) {
        return jsonResponse(res, 401, { error: "Invalid seed key" });
      }
-@@ -1136,11 +1212,11 @@
+@@ -1136,11 +1208,11 @@
        return jsonResponse(res, 400, { error: "token and photoKey required" });
      }
  
@@ -2478,7 +2497,7 @@
      console.log(`[DEV] Seeded session ${data.token} → ${data.photoKey}`);
  
      jsonResponse(res, 200, {
-@@ -1186,7 +1262,9 @@
+@@ -1186,7 +1258,9 @@
      // as "unknown booth" so we never lose customer data.
      let boothId = "unknown";
      if (token) {
@@ -2489,7 +2508,7 @@
        if (session && session.boothId) boothId = session.boothId;
      }
      const city = BOOTH_CITIES.get(boothId) || boothId;
-@@ -1463,13 +1541,11 @@
+@@ -1463,13 +1537,11 @@
          console.warn(`[BOOTH] photos_ready missing token/photoKey from ${boothId}`);
          return;
        }
@@ -2508,7 +2527,7 @@
        return;
      }
  
-@@ -1710,78 +1786,14 @@
+@@ -1710,78 +1782,14 @@
  // Helpers
  // ---------------------------------------------------------------------------
  
@@ -2594,7 +2613,7 @@
  }
  
  /**
-@@ -2129,6 +2141,8 @@
+@@ -2129,6 +2137,8 @@
  // Start
  // ---------------------------------------------------------------------------
  
@@ -2605,7 +2624,7 @@
    console.log(`[RELAY] Registered booths: ${[...BOOTH_API_KEYS.keys()].join(", ") || "none"}`);
 --- /dev/null
 +++ b/capturism-relay/session-metadata.cjs
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,241 @@
 +'use strict';
 +const { createHash } = require('node:crypto');
 +const mediaScope = require('./qr-media-scope.cjs');
@@ -2804,27 +2823,47 @@
 +      throw failure(503, 'Download metadata contention');
 +    });
 +  }
-+  async function load(token, { fresh = false } = {}) {
++  async function resolveAuthorized(token, data) {
++    try { await ensureAuthorized(token, data); return data; }
++    catch (err) { if (err.status !== 403) throw err; }
++    // Denial may describe an old snapshot, not the current durable mapping.
++    // Never reuse it if refresh fails, and never recursively refresh a denial
++    // of the fresh record. Keep a concurrent writer's newer cache entry intact.
++    if (cache.get(token) === data) cache.delete(token);
++    try { return await load(token, { fresh: true, expected: data }); }
++    catch (err) {
++      if ([400, 403, 410].includes(err.status)) throw err;
++      throw Object.assign(failure(503, 'Download session temporarily unavailable'), { sessionRead: true });
++    }
++  }
++  async function load(token, { fresh = false, expected } = {}) {
 +    keyFor(token);
 +    let data = fresh ? null : cache.get(token);
++    if (data) {
++      if (data.expiresAt <= now()) { cache.delete(token); return null; }
++      return resolveAuthorized(token, data);
++    }
 +    if (!data) {
 +      const stored = await read(token); data = stored?.data;
 +      if (data) {
 +        if (data.expiresAt <= now()) { cache.delete(token); return null; }
++        if (expected && (identity(data) !== identity(expected) || data.createdAt !== expected.createdAt || data.expiresAt !== expected.expiresAt)) throw failure(503, 'Download recovery identity or expiry conflict');
 +        await authorize(token, data);
 +        const proof = await authority(token, data);
 +        if (!proof || proof.expiresAt <= now()) return null;
 +        const savedClock = await videoClock(token, proof);
 +        const startedAt = savedClock ?? data.videoWaitStartedAt ?? data.createdAt;
 +        if (data.videoWaitStartedAt !== undefined && data.videoWaitStartedAt !== startedAt) throw failure(503, 'Video wait clock conflict');
++        if (expected?.videoWaitStartedAt !== undefined && expected.videoWaitStartedAt !== startedAt) throw failure(503, 'Video wait recovery conflict');
 +        data = { ...data, videoWaitStartedAt: savedClock ?? await videoClock(token, proof, startedAt) };
 +      }
 +    }
 +    if (!data || data.expiresAt <= now()) { cache.delete(token); return null; }
 +    await authorize(token, data);
++    if (data.expiresAt <= now()) { cache.delete(token); return null; }
 +    cache.set(token, data); return data;
 +  }
-+  return { authorize: ensureAuthorized, issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
++  return { authorize: ensureAuthorized, resolveAuthorized, issue, save: (token, input) => change(token, input, false), patch: (token, input) => change(token, input, true), load };
 +}
 +module.exports = { createSessionMetadataStore };
 --- /dev/null

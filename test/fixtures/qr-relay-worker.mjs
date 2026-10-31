@@ -41,7 +41,9 @@ store.beforePut = async ({ Key }) => {
     process.send({ phase: 'before-clock-write' }); await new Promise(() => {});
   }
 };
+let metadataGets = 0;
 store.beforeGet = async ({ Key }) => {
+  if (Key.endsWith('/meta.json') && ++metadataGets > 1 && process.argv[5] === 'refresh-read-error') throw new Error('Injected refresh read outage');
   if (Key.startsWith('qr-media-authorizations/') && (process.argv[5] === 'approval-read-error' || (process.argv[5] === 'post-save-approval-error' && metadataSaved))) throw new Error('Injected approval read outage');
 };
 store.beforeHead = async () => { if (process.argv[5] === 'head-error') throw Object.assign(new Error('Storage unavailable'), { $metadata: { httpStatusCode: 503 } }); };
@@ -56,3 +58,13 @@ const server = http.createServer((req, res) => {
 });
 server.listen(0, '127.0.0.1', () => { base = `http://127.0.0.1:${server.address().port}`; process.send({ port: server.address().port }); });
 process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => process.exit(0)); });
+
+// Test-only provider replacement models another relay's durable commit while
+// preserving this process's warm session cache. There is no HTTP control route.
+process.on('message', message => {
+  if (message?.type !== 'replace-provider' || !Array.isArray(message.objects)) return;
+  store.objects.clear();
+  for (const [key, bytes] of message.objects) store.objects.set(key, Buffer.from(bytes, 'base64'));
+  queue.atomicJSON(providerFile, message.objects);
+  process.send({ phase: 'provider-replaced' });
+});
