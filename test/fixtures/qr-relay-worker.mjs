@@ -5,9 +5,13 @@ import { storage } from '../helpers/relay-fixture.mjs';
 import { makeQrRelay, PHOTO } from '../helpers/qr-relay-fixture.mjs';
 import queue from '../../candidate/pool-queue.cjs';
 const providerFile = process.argv[2], store = storage();
-if (fs.existsSync(providerFile)) for (const [key, bytes] of JSON.parse(fs.readFileSync(providerFile, 'utf8'))) store.objects.set(key, Buffer.from(bytes, 'base64'));
-store.objects.set(PHOTO, Buffer.alloc(32, 7));
-if (!fs.existsSync(providerFile)) queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
+if (fs.existsSync(providerFile)) {
+  for (const [key, bytes] of JSON.parse(fs.readFileSync(providerFile, 'utf8'))) store.objects.set(key, Buffer.from(bytes, 'base64'));
+} else {
+  // Seed only a fresh provider. A restart must not manufacture a lost photo.
+  store.objects.set(PHOTO, Buffer.alloc(32, 7));
+  queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
+}
 store.failWrites = process.argv[3] === 'fail' ? 1 : 0;
 const original = store.send.bind(store);
 store.send = async command => {

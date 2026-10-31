@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { fork } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { storage } from './helpers/relay-fixture.mjs';
@@ -84,6 +84,27 @@ test('a save completing after retention expiry cannot acknowledge a usable QR or
   assert.equal(saved(store).createdAt, 1000000); assert.equal(saved(store).expiresAt, 87400000);
 });
 
+test('exact expiry boundary rejects warm and cold replay without any metadata write', async () => {
+  const store = storage(); let clock = 1000000;
+  const relay = makeQrRelay(store, { now: () => clock }); await relay.confirm(BODY);
+  const original = store.objects.get(KEY); clock = saved(store).expiresAt;
+  for (const current of [relay, makeQrRelay(store, { now: () => clock })]) {
+    assert.equal((await current.confirm(BODY)).status, 410);
+    assert.equal((await current.download(TOKEN)).status, 404);
+  }
+  assert.equal(store.objects.get(KEY), original); assert.equal(store.writes, 1);
+});
+
+test('stale warm relay reconciles a photo replay from durable media without renewing retention', async () => {
+  const store = storage(), stale = makeQrRelay(store); await stale.confirm(BODY);
+  const original = saved(store), second = makeQrRelay(store);
+  await second.confirm({ ...BODY, layoutVideoKey: `sessions/${TOKEN}/layout.mp4` });
+  assert.equal(stale.cache.get(TOKEN).layoutVideoKey, undefined);
+  assert.equal((await stale.confirm(BODY)).status, 200);
+  assert.ok(stale.cache.get(TOKEN).layoutVideoKey); assert.equal(saved(store).expiresAt, original.expiresAt);
+  assert.equal(store.writes, 2);
+});
+
 test('conflicting photo, booth or completed video identity cannot overwrite a committed session', async () => {
   const store = storage(), relay = makeQrRelay(store); await relay.confirm({ ...BODY, layoutVideoKey: `sessions/${TOKEN}/layout.mp4` });
   const original = saved(store);
@@ -135,5 +156,18 @@ test('actual relay handler in a new child process resolves the acknowledged QR a
     const photoResponse = await fetch((await download.json()).photoUrl); assert.equal(photoResponse.status, 200);
     assert.deepEqual(Buffer.from(await photoResponse.arrayBuffer()), Buffer.alloc(32, 7));
     assert.equal((await confirm()).status, 200);
+  } finally { if (child?.exitCode === null) { const died = once(child, 'exit'); child.kill('SIGTERM'); await died; } await rm(directory, { recursive: true, force: true }); }
+});
+
+test('restart fixture does not conceal a missing provider photo by reseeding it', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'capturism-qr-no-reseed-')); let child;
+  try {
+    const record = { photoKey: PHOTO, boothId: 'synthetic-booth', createdAt: Date.now(), expiresAt: Date.now() + 86400000 };
+    const file = join(directory, 'provider.json');
+    await writeFile(file, JSON.stringify([[KEY, Buffer.from(JSON.stringify(record)).toString('base64')]]));
+    child = fork(new URL('./fixtures/qr-relay-worker.mjs', import.meta.url), [file, 'normal'], { env: { PATH: process.env.PATH }, stdio: ['ignore','pipe','pipe','ipc'] });
+    const [{ port }] = await once(child, 'message');
+    const metadata = await fetch(`http://127.0.0.1:${port}/download/${TOKEN}`); assert.equal(metadata.status, 200);
+    const photo = await fetch((await metadata.json()).photoUrl); assert.equal(photo.status, 404);
   } finally { if (child?.exitCode === null) { const died = once(child, 'exit'); child.kill('SIGTERM'); await died; } await rm(directory, { recursive: true, force: true }); }
 });
