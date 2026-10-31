@@ -1,6 +1,6 @@
 # Durable QR confirmation and expiry — local candidate
 
-Combined implementation `001032e`, based on Capturism `1f2df64`. R3–R8 are resolved locally within their tested scope; see [final verification](FINAL-REVIEW.md). Actual provider/kiosk/phone-hosting and paired-state retention/backup checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, device operation or client message.
+Combined implementation `001032e`, based on Capturism `1f2df64`. R3–R8 remain resolved within their tested scope; a later review finds R9 high OPEN at media-key authorization; see [final verification](FINAL-REVIEW.md). Actual provider/kiosk/phone-hosting and paired-state retention/backup checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, device operation or client message.
 
 ## Issuance and original expiry
 
@@ -37,7 +37,7 @@ Kiosk recovery still reuses its original Blob/token/completed PUT checkpoint aft
 
 ## Evidence and reproduction
 
-164 twin tests, 27 targeted kiosk tests and 16 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 24-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
+169 twin tests, 27 targeted kiosk tests and 16 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 24-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
 
 `node audit/reproduce-qr-expiry-recovery.mjs` now asserts safe R4/R5 outcomes (`test-results/qr-expiry-after.json`); prior unsafe output is retained separately. `node audit/reproduce-qr-persistence.mjs` still compares baseline false acknowledgement to safe candidate recovery. `node audit/verify-qr-artifact.mjs` checks exact isolated patch application. `node audit/prepare-phone-check.mjs` prepares the isolated phone test checkout using already-installed kiosk dev tools.
 
@@ -66,3 +66,11 @@ Fifteen dedicated cases cover storage status errors, partial outcomes, failed/lo
 `audit/reproduce-video-probe-read.mjs` and `audit/phone-video-discovery.review.test.tsx` now assert safe recovery; old unsafe evidence stays under `qr-clock-review-*`. The phone already handles 503 with same-token Try again and a separate 20-second whole-read deadline. Browser verification shows outage → retry → photo/video links, with one necessary discovery metadata write and no media upload. Local synthetic data only; preview services stopped.
 
 Current summary: `audit/qr-discovery-validation.json`; details `test-results/qr-discovery-*`. Actual SDK/R2 conditional/abort behavior, paired retention/backups, kiosk/hosting and cutover remain release gates. Coalescing/negative cache are per-process memory; restart intentionally rechecks durable state. Nothing is deployed.
+
+## Later authorization re-review — OPEN R9
+
+The photo identity/expiry proof does not authorize every caller-supplied video key. MEDIA validation currently checks string shape only; an authenticated booth can attach an unrelated bucket object to its own normal QR, and signing/public proxy then read that object. `audit/reproduce-qr-media-scope.mjs` demonstrates all three media fields on baseline/candidate with synthetic private records, including cold restart. It requires valid booth authorization and a known/readable target key; this is not a demonstrated anonymous bucket listing or live incident.
+
+The [rollout plan](ROLLOUT-ROLLBACK.md) adds A12 for new-key ownership/kind/namespace checks and safe public reads of existing mappings. Historical mappings need explicit trusted legacy handling; neither presence in metadata nor a media-looking extension proves ownership. Keep original clocks/media unchanged when rejecting/quarantining unsafe references. Production source is unchanged in this review; current summary is `audit/qr-discovery-final-rereview.json`.
+
+Five added discovery overlap/restart cases pass, including cross-relay commits, conflicts, warm/cold 50-reader bursts and ephemeral negative-cache restart. Actual cloud load remains a gate: cold initial hydration is not coalesced. These positive results do not close R9.

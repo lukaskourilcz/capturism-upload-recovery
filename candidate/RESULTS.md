@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current [audit](AUDIT.md): 164 twin tests, 27 targeted kiosk tests and 16 phone tests pass. Implementation `001032e` closes R8 locally with retryable discovery failures, coordinated readers, completed-negative caching and durable immediate recovery. All prior pool/QR/clock fixes remain covered. [Final verification](FINAL-REVIEW.md) includes real process restart and browser photo/video-link recovery using synthetic data. Actual kiosk/cloud/paired-state/backup/dependency/cutover gates remain. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate, superseded by current contracts.
+This document records the initial QR experiment. Current [audit](AUDIT.md): 169 twin tests, 27 kiosk tests and 16 phone tests pass. The latest [review](FINAL-REVIEW.md) of unchanged implementation `001032e` finds OPEN R9 at media-key authorization/public reads, with separate unsafe synthetic baseline/candidate evidence. R1–R8 and the kiosk deadline remain valid, including added overlap/restart checks. The [plan](ROLLOUT-ROLLBACK.md) holds release for R9 and real kiosk/cloud/paired-state/backup/load/dependency/cutover checks. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
 
 ## Reproduction
 

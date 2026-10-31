@@ -1,8 +1,8 @@
-# Combined patch audit — R8 fixed locally; release gated
+# Combined patch audit — HOLD: unsafe media-key delegation
 
 Reviewed against Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Tested implementation `001032ea0f1c98ff61a7e157c04ee5e9b3e32b62`. Production patch SHA-256 `9675fb069a72ba1640e266becb4b917ef537e39acd2fbe1ba7c2ac60b313dcad`; 24 changed files.
 
-**2026-10-31: R8 is resolved locally.** R1–R7 and the kiosk deadline remain covered. 164 twin tests, 27 targeted kiosk tests and 16 phone tests pass. Actual kiosk/cloud/paired-retention/backup/dependency/cutover checks still gate release. No deployment, push, provider/device/payment/print action, credential access or client message was performed.
+**Re-review 2026-10-31: R9 high (unrelated bucket objects delegated through QR media fields) is OPEN.** R1–R8 and the kiosk deadline remain locally valid in their tested scope. Production implementation/hash are unchanged. 169 twin tests, 27 kiosk tests and 16 phone tests pass; six separate unsafe baseline/candidate cases demonstrate R9. No deployment, push, credentials, live provider/device/payment/print action or client message.
 
 ## R1 — High: withdrawn entry recreated by replay — resolved locally
 
@@ -92,6 +92,18 @@ Completed negatives are cached only in a WeakMap for the validated session objec
 
 Fifteen discovery tests and three real process-restart tests pass, including failed/lost save acknowledgement, mixed errors, overlapping success/failure, timeout/late results, bounded stalled saves, negative cache/grace, stale/historical metadata and expiry. Restart serves original video bytes and preserves proof/wait/metadata times. Former reproducers now assert safe outcomes. Chrome demonstrates provider HEAD failure → Try again → same QR photo/video links, with one necessary metadata save and no media upload. Evidence: `audit/qr-discovery-validation.json`, `test-results/qr-discovery-*`; both local preview services stopped. No contact/share action was sent.
 
+## R9 — High: booth-supplied media keys can expose unrelated bucket objects — OPEN
+
+`session-metadata.cjs:125` validates video/layout/story keys as strings, but does not bind a new key to the issued token, authenticated booth or permitted media namespace. The expiry proof binds the photo identity; it does not authorize arbitrary additional media. Public download signing and `server.js:963–976` proxy subsequently trust those stored references and use the relay's storage credentials to read them.
+
+Local actual-handler reproduction: an authenticated booth obtains its own normal photo token, confirms that photo with an unrelated object key in a video field, receives 200, then the public proxy returns the unrelated object's original bytes. All three media fields work with synthetic `subscriptions/`, `quiz-codes/` and `pool/` records. Warm and restarted relays both return 200; download signing also targets the unrelated key. The captured baseline and candidate both exhibit this inherited boundary gap. It is not a regression in discovery coalescing or clock persistence.
+
+Prerequisites: valid booth authorization to issue/confirm the mapping, a known or guessable target key, and relay credentials able to read that object. This does not demonstrate unauthenticated mapping creation, bucket listing or live exploitation. The fixture supplies the already-authenticated booth identity; actual confirmation and public proxy code execute against isolated storage/loopback HTTP. No real credentials, cloud objects or customer data were accessed.
+
+Before release, constrain newly accepted media references to server-authorized assets for that token/booth and media kind. Apply the shared rule to HTTP/WS/dev-seed/discovery writers and independently guard public signing/proxy reads against unsafe historical mappings. Preserve only explicitly verified legitimate legacy assets; merely existing in old metadata is not ownership evidence. Reject unrelated namespaces and foreign/expired-session references without rewriting clocks or trusted media. MIME/extension checks alone are insufficient.
+
+Evidence: `node audit/reproduce-qr-media-scope.mjs` → `test-results/qr-final-rereview-open-media-scope.json`: six unsafe cases (baseline/candidate × three fields), original synthetic bytes exposed by public proxy before/after restart. A successful exit reproduces R9, not a fix. Production source is unchanged by this review.
+
 ## Proof retention and legacy adoption review
 
 The built-in backup module is unchanged and only snapshots pool prefixes. Actual-module local tests prove live `qr-expiry/v1/` and `qr-video-wait/v1/` are outside pool pruning and are not copied into snapshots; nested old snapshot keys are pruned under `backups/pool/`. Therefore a pool backup marker is not proof of QR backup completeness. An independent verified current expiry-proof/video-clock backup/restore procedure, lifecycle exclusions and permissions are required before rollout; no external backup/lifecycle was inspected or changed.
@@ -109,18 +121,18 @@ New positive cases prove cold legacy recovery after failed proof persistence or 
 
 ## Final local validation
 
-Implementation `001032e`, 2026-10-31; exact patch `9675fb069a72ba1640e266becb4b917ef537e39acd2fbe1ba7c2ac60b313dcad`. Summary `audit/qr-discovery-validation.json`.
+Re-reviewed snapshot `d42e15f`, implementation `001032e`, evidence `76a51f3`, 2026-10-31. Production source/24-file hash unchanged. Summary: `audit/qr-discovery-final-rereview.json`.
 
-- **164 twin tests, 27 targeted kiosk tests and 16 phone tests pass.** R8 reproducers now assert safe retry/persistence/concurrent behavior; unsafe historical output is separate. All prior slow/idle/pool/QR deadline/expiry/restart checks remain green, including metadata/clock/acknowledgement SIGKILL boundaries.
-- Kiosk TypeScript/full lint/build; phone TypeScript/build/component/helper lint; twin build; JS syntax; exact isolated 24-file application all pass. Existing warnings remain. No dependencies or lockfiles changed.
-- Browser verifies local HEAD failure/retry and recovered photo/video links with synthetic media, no upload/contact/share, and one discovery metadata write. Temporary services stopped. Real process restart tests retrieve original video bytes after read/save faults or an ambiguous save acknowledgement.
-- Normal cold discovery now rereads durable metadata/proof/clock before probing and again before a negative result; each scan is up to six HEADs. Overlapping readers coalesce per process. A successful scan may add one conditional metadata write. Negative results cache for 20 seconds in memory, with grace-boundary invalidation. Real cloud latency/cost/concurrency remains unmeasured.
-- Full relay integrations, actual SDK/provider/paired backups/lifecycle, Windows/hardware/power-loss/idle, Pages/Render remain unverified. Client abort does not prove provider work stopped; late write reconciliation is tested locally.
-- Earlier queue benchmark remains Mac-only: 20 pending 2 MiB portraits (about 53 MiB JSON), 54/51/50 ms scans. Saved dependency counts remain untriaged: kiosk 14 (1 critical, 11 high, 1 moderate, 1 low); relay 6 (3 high, 3 moderate). Not fresh scans or exploitability assessments.
+- **169 twin tests, 27 targeted kiosk tests and 16 phone tests pass.** Five additional overlap/restart tests preserve keys, clocks and bytes. Six separate synthetic cases reproduce OPEN R9; their successful assertions are not proof of media authorization safety.
+- Actual probe/read/save functions reconcile cross-relay commits during HEAD and conflicting keys on retry. Fifty warm/cold readers each share five HEADs and one metadata save; warm uses six GETs, cold uses 156. Initial cold hydration is not coalesced. Real hosting latency/cost/limits are unmeasured and remain a staging load gate.
+- Restart after verified absence drops only in-memory negative state and finds later video on a fresh request. This does not promise continued phone polling after confirmed absence beyond grace. Existing timeout/late-save/coalescing/SIGKILL boundary cases remain green.
+- Kiosk TypeScript/full lint/build; phone TypeScript/build/component/helper lint; twin build; JS syntax and byte-exact isolated application of all 24 candidate files pass. Production dependencies/lockfiles unchanged; existing warnings remain. No new browser operation or preview server in this review.
+- Actual R2 SDK/permissions/paired retention/backups, full relay integrations, Windows/hardware/power-loss/studio idle, Pages/Render and controlled cutover remain unverified. Prior browser evidence covers discovery recovery, not media-scope authorization.
+- Earlier queue measurement remains Mac-only (20 pending 2 MiB portraits, 54/51/50 ms scans). Saved advisory counts remain untriaged: kiosk 14 (1 critical, 11 high, 1 moderate, 1 low); relay 6 (3 high, 3 moderate). Not fresh scans or exploitability assessments.
 
 ## Remaining issues and release gates
 
-**R1–R8 and the kiosk deadline are locally closed within the tested scope.** Actual provider persistence, expiry-proof retention/legacy adoption and phone hosting still need staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
+**R9 requires authorization/read-boundary resolution before release. R1–R8 and the kiosk deadline remain locally closed within their tested scope.** Actual provider persistence, expiry-proof retention/legacy adoption and phone hosting still need staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
 
 **Launcher/update automation must be controlled.** `start-kiosk.bat` and `update-kiosk-auto.bat` switch a non-main/detached checkout to `main`, may stash tracked edits and pull again. A rollback to a detached SHA followed by the stock launcher is therefore not a pin. The revised rollout plan requires verified `main`/artifact alignment or an approved maintenance launcher, plus frozen automatic updates/restarts. Never run these launchers on this Mac as a rehearsal; they are Windows device/process operations.
 
@@ -130,6 +142,6 @@ Image deletion and metadata publication are not an atomic multi-object transacti
 
 The bridge queue remains single-writer, with durability beginning after local acknowledgement. Do not launch another worker against its folder, clear receipts, re-identify jobs or restore stale backups. Page closure before JPEG handoff, catastrophic disk failure and physical Windows power loss remain outside demonstrated durability. Corrupt/blocked/older-than-24h jobs retain bytes for review; no consent is renewed automatically.
 
-Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. The environment, paired-state retention/backup, dependency and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
+Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. R9 plus the environment, paired-state retention/backup, dependency and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
 
 See the [final combined review](FINAL-REVIEW.md), [protocol and failure boundaries](PUBLICATION-FENCING.md), [coverage ledger](AUDIT-COVERAGE.md) and [rollout/rollback plan](ROLLOUT-ROLLBACK.md).
