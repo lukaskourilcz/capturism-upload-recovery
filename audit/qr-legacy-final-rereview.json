@@ -1,0 +1,107 @@
+{
+  "date": "2026-10-31",
+  "reviewedSnapshot": "3e40866",
+  "implementationCommit": "4a749676c6af55133f907b54822235e6ffa5e2d9",
+  "newReviewEvidenceCommit": "fafb761240224ea92dadcf562d5b2274c45cb810",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "09ef5958dcd77254e0cfec696e6a82ac643c489c63848d552332dd77a319bb77",
+  "candidateFilesMatched": 26,
+  "productionSourceChanged": false,
+  "twinTestsPassed": 218,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "additionalPositiveReviewTests": 7,
+  "positiveChecks": [
+    "WebSocket and dev seed photo-only hydration retain approved variants and original clocks",
+    "approved completed videos hydrate with absent/false videosPending",
+    "wrong booth cannot hydrate approval",
+    "expired retained approval cannot reopen token",
+    "approval read failure before save and after persistence each recover after SIGKILL/replacement; original media and proof/wait/approval preserved"
+  ],
+  "openFindings": [
+    {
+      "id": "R11",
+      "priority": 2,
+      "severity": "medium",
+      "location": "candidate/capturism-relay/session-metadata.cjs:201-216; public download/proxy scope-error mapping; capturism-download/src/lib/readDownload.ts:17-18",
+      "trigger": "Warm legacy mapping on A; active metadata lost; video approval removed/narrowed; B legitimately reconstructs canonical photo-only record with original proof/wait",
+      "impact": "A keeps returning terminal 404 for valid recovered photo while recovered/fresh relay returns 200; no phone retry control",
+      "reproduction": "audit/reproduce-stale-legacy-cache.mjs",
+      "evidence": {
+        "finding": "R11",
+        "status": "OPEN",
+        "severity": "medium",
+        "interpretation": "A stale denied legacy cache masks a valid recovered canonical photo mapping. Repeated public reads remain terminal 404 until cache eviction/restart, while another relay serves 200. Revoked video is never read; no unrelated object exposure or live incident claimed.",
+        "cases": [
+          {
+            "revocation": "removed",
+            "confirmationStatus": 200,
+            "recoveredRelayDownload": 200,
+            "recoveredRelayPhotoProxy": 200,
+            "staleRelayDownload": 404,
+            "staleRelayRepeatedDownload": 404,
+            "staleRelayPhotoProxy": 404,
+            "freshRelayDownload": 200,
+            "afterLocalCacheEvictionDownload": 200,
+            "revokedVideoObjectReads": 0,
+            "originalClocksAndMediaPreserved": true,
+            "publicReadWrites": 0
+          },
+          {
+            "revocation": "narrowed",
+            "confirmationStatus": 200,
+            "recoveredRelayDownload": 200,
+            "recoveredRelayPhotoProxy": 200,
+            "staleRelayDownload": 404,
+            "staleRelayRepeatedDownload": 404,
+            "staleRelayPhotoProxy": 404,
+            "freshRelayDownload": 200,
+            "afterLocalCacheEvictionDownload": 200,
+            "revokedVideoObjectReads": 0,
+            "originalClocksAndMediaPreserved": true,
+            "publicReadWrites": 0
+          }
+        ]
+      },
+      "required": "Reconcile fully validated current durable state after cached denial; bounded refresh, retryable read failure, no revoked asset fallback or clock change; verify A14",
+      "notClaimed": [
+        "revoked-video or unrelated-object disclosure",
+        "corrupt metadata writes",
+        "actual production replica topology",
+        "live studio incident"
+      ]
+    }
+  ],
+  "closedWithinExistingScope": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "R10",
+    "kiosk deadline"
+  ],
+  "checks": "kiosk TypeScript/full lint/build, phone TypeScript/component+helper lint/build, twin build, exact patch application/JS syntax passed; validated overlays byte-match all 14 client candidate files",
+  "operationCounts": "unchanged artifact: canonical discovery burst 6 warm/156 cold GET +5 HEAD +1 PUT; first canonical confirmation 1 approval GET, canonical replay 0, approved legacy reconstruction/replay 3; public approved legacy 2 warm/3 cold approval GETs. Cloud latency/capacity unverified.",
+  "releaseStatus": "HOLD for R11/A14 plus existing kiosk/cloud/private legacy/backup/dependency/cutover gates",
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "liveProviderAccess": false,
+  "browserActions": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-legacy-rereview-focused.txt",
+    "test-results/qr-legacy-rereview-full-tests.txt",
+    "test-results/qr-legacy-rereview-kiosk-tests.txt",
+    "test-results/qr-legacy-rereview-phone-tests.txt",
+    "test-results/qr-legacy-rereview-artifact.json",
+    "test-results/qr-legacy-rereview-authorization.json",
+    "test-results/qr-legacy-rereview-recovery.json",
+    "test-results/qr-legacy-rereview-open-cache.json"
+  ]
+}

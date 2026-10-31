@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current [audit](AUDIT.md): 211 twin tests, 27 kiosk tests and 16 phone tests pass. Implementation `4a74967` resolves R10 locally: photo-only recovery restores independently approved legacy videos after metadata loss and preserves original clocks. Replay, revocation, failed/lost saves, simultaneous writers and process-kill recovery pass. The [plan](ROLLOUT-ROLLBACK.md) still requires actual kiosk/cloud/private legacy/backup/load/dependency/cutover checks. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
+This document records the initial QR experiment. Current [audit](AUDIT.md): 218 twin tests, 27 kiosk tests and 16 phone tests pass. Production implementation `4a74967` and its 26-file patch are unchanged. R10 remains valid, including seven new caller/approval-restart checks; the [latest review](FINAL-REVIEW.md) demonstrates OPEN R11: stale legacy cache can return terminal 404 for a valid photo reconstructed on another relay after approval revocation. Fresh process/cache eviction returns 200; revoked videos remain blocked. The [plan](ROLLOUT-ROLLBACK.md) holds release for R11/A14 and actual kiosk/cloud/private legacy/backup/load/dependency/cutover gates. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
 
 ## Reproduction
 

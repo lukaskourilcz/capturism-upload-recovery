@@ -1,6 +1,6 @@
 # Durable QR confirmation and expiry — local candidate
 
-Combined implementation `4a74967`, based on Capturism `1f2df64`. R3–R10 are resolved locally within their tested scope, including QR media authorization and photo-only approved legacy reconstruction. See [final verification](FINAL-REVIEW.md) and [rollout gates](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, cloud/device operation or client message.
+Combined implementation `4a74967`, based on Capturism `1f2df64`. R3–R10 remain resolved locally within their tested scope, including QR media authorization and photo-only approved legacy reconstruction; R11 medium remains OPEN for stale warm-cache reconciliation after recovery. See [final verification](FINAL-REVIEW.md) and [rollout gates](ROLLOUT-ROLLBACK.md). No deployment, push, credential change, cloud/device operation or client message.
 
 ## Issuance and original expiry
 
@@ -37,7 +37,7 @@ Kiosk recovery still reuses its original Blob/token/completed PUT checkpoint aft
 
 ## Evidence and reproduction
 
-211 twin tests, 27 targeted kiosk tests and 16 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 26-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
+218 twin tests, 27 targeted kiosk tests and 16 phone React tests pass; kiosk TypeScript/full lint/build, phone TypeScript/build/component lint, twin build and exact 26-file artifact/syntax checks pass. Tests include failed saves/reads, lost acknowledgements, video-history replay, competing relays, exact expiry with/without metadata, partial restore, legacy adoption and SIGKILL/restart with actual handler photo retrieval. A separate missing-photo control remains 404.
 
 `node audit/reproduce-qr-expiry-recovery.mjs` now asserts safe R4/R5 outcomes (`test-results/qr-expiry-after.json`); prior unsafe output is retained separately. `node audit/reproduce-qr-persistence.mjs` still compares baseline false acknowledgement to safe candidate recovery. `node audit/verify-qr-artifact.mjs` checks exact isolated patch application. `node audit/prepare-phone-check.mjs` prepares the isolated phone test checkout using already-installed kiosk dev tools.
 
@@ -79,7 +79,7 @@ Public loads and final signing/proxy sinks recheck authorization. Approval delet
 
 Seventeen focused tests cover all media fields and write callers, new/legacy/public paths, owner conflicts, forged/changed/missing approvals, outages at load and final sinks, malformed/oversized/unversioned responses, expiry, offline manifest generation and SIGKILL/restart with approval retained or removed. The offline tool writes a new 0600 file without cloud access or overwrite. Private ownership verification and protected installation remain operator gates; the tool validates structure, not studio ownership evidence.
 
-Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current summary: `audit/qr-legacy-validation.json`; earlier summaries remain historical. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
+Evidence: `audit/reproduce-qr-media-scope.mjs` → `test-results/qr-media-before-after.json` compares three vulnerable baseline cases with three blocked candidate cases, including public proxy before/after restart. `test/qr-media-scope.test.mjs` contains the positive/recovery regressions. Current re-review: `audit/qr-legacy-final-rereview.json`; original R10 validation: `audit/qr-legacy-validation.json`; earlier summaries remain historical. Historical unsafe evidence remains in `test-results/qr-final-rereview-open-media-scope.json`.
 
 Five added discovery overlap/restart cases pass, including cross-relay commits, conflicts, warm/cold 50-reader bursts and ephemeral negative-cache restart. Actual cloud load remains a gate: cold initial hydration is not coalesced. R9 has separate write/read authorization evidence above.
 
@@ -96,6 +96,18 @@ Replay and conditional cross-relay recovery retain original photo/video bytes, e
 Eighteen dedicated regressions cover canonical/noncanonical photos, before/after video grace, all approved video fields, warm/cold replay, conflicts, revoked/missing/malformed/null/mismatched approvals, private-key rejection, read/save/lost-ACK failures, post-save authorization, concurrent replay and two real process-replacement cases. One kills the relay after a failed save; another kills it after the complete metadata is durable but before acknowledgement. Fresh processes serve the original bytes and reuse the commit; later revocation stays denied.
 
 `audit/reproduce-legacy-media-restore.mjs` now asserts safe recovery: original approved video is present, `videoFailed:false`, restart retains it and another photo-only replay adds zero writes. Current evidence: `test-results/qr-legacy-before.json`, `qr-legacy-after.json`, `qr-legacy-focused.txt` and `qr-legacy-full-tests.txt`; current summary: `audit/qr-legacy-validation.json`. No cloud, deployment, push or client message.
+
+## R11 — Medium: stale denied cache hides a valid recovered photo — OPEN
+
+Trigger: relay A cached an approved legacy video mapping. Active metadata is then absent and that video approval is removed or narrowed. Relay B legitimately reconstructs a photo-only canonical mapping using the retained original proof/wait and authenticated photo identity. B and a fresh process serve the original photo with 200, without the revoked video. A still authorizes its old cached mapping at `session-metadata.cjs:201–216`, fails on the revoked video and never reloads current durable metadata.
+
+Actual-handler evidence covers removed and narrowed approvals: both download and the photo asset proxy on A return 404; repeated GET remains 404, while B/new process return 200 for the same QR. Evicting only A's local cache restores 200 without changing storage. Server download/proxy map that scope denial to terminal 404; `capturism-download/src/lib/readDownload.ts` treats it as expired/invalid, so the normal phone retry button is unavailable. This can make valid photo recovery appear broken across warm replicas/overlapping relay processes. No live replica topology or studio incident was verified.
+
+The revoked video is never read, no unrelated object is exposed, and original media/proof/wait remain intact. This is an availability/cache reconciliation defect, not a reason to relax revocation. R9 authorization and R10 exact reconstruction remain valid within their tested scope.
+
+Required resolution: a denial from a warm cached mapping must reconcile current durable state before deciding the QR is invalid. Fully validate the new record, original proof/wait and media scope; never ignore the denial or fall back to unauthorized cached assets. Keep refresh bounded, missing/expired/unsafe state terminal, and storage/corrupt-authority errors retryable/reconcilable. Test photo download and proxy across warm/fresh relays, removed/narrowed approval, unchanged unsafe or missing metadata, revoked-video denial and refresh failure; preserve all clocks/bytes.
+
+Evidence: `node audit/reproduce-stale-legacy-cache.mjs` → `test-results/qr-legacy-rereview-open-cache.json`, two local synthetic cases using actual public proxy over loopback HTTP. Successful exit reproduces OPEN R11. Production source and 26-file patch hash are unchanged in this review; no fix was included. Release remains on hold for A14 and the environment gates. Do not restore a revoked approval to make a stale cache work.
 
 ## Offline legacy approval procedure — no cloud action performed
 
@@ -122,3 +134,5 @@ Recovery scope: preserve the original legacy metadata with proof/wait/approval/m
 Every creation/reconstruction of metadata performs an optional approval GET before saving, including a normal canonical first confirmation. Confirmed missing approval permits only independently authorized assets; unreadable approval returns 503 rather than hiding a possibly recoverable legacy mapping. JSON null is invalid scope, not absence. Existing canonical replay does not add an approval read.
 
 Measured local approval reads: canonical first confirmation 1, canonical replay 0; approved legacy reconstruction 3, approved legacy replay 3 (initial validation, pre-save and post-save checks). Public approved legacy reads remain 2 warm / 3 cold; canonical public reads remain 0. These are provider-operation counts, not cloud latency/cost measurements. Verify required prefix Get/ETag access, timeout behavior and representative load in staging.
+
+R11 caution: removing/narrowing approval still blocks the old legacy mapping on cached relays even after another relay creates a valid canonical photo-only record. Fresh-process success is not evidence that every warm replica recovered. Do not restore the old approval or flush live state blindly; repeat A14 in isolated staging and retain a compatible fix before release.
