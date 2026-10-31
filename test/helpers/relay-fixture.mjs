@@ -7,9 +7,10 @@ import publication from '../../candidate/capturism-relay/pool-publication.cjs';
 import { Readable } from 'node:stream';
 class PutObjectCommand { constructor(input) { this.input = input; } }
 class GetObjectCommand { constructor(input) { this.input = input; } }
+class HeadObjectCommand { constructor(input) { this.input = input; } }
 class ListObjectsV2Command { constructor(input) { this.input = input; } }
 class DeleteObjectCommand { constructor(input) { this.input = input; } }
-export const storageCommands = { PutObjectCommand, GetObjectCommand };
+export const storageCommands = { PutObjectCommand, GetObjectCommand, HeadObjectCommand };
 const source = await readFile(new URL('../../candidate/capturism-relay/pool.js', import.meta.url), 'utf8');
 export function makeRelay(storage, code = source, boothId = 'test-booth') {
   const module = { exports: {} };
@@ -30,7 +31,7 @@ export function makeRelay(storage, code = source, boothId = 'test-booth') {
   return module.exports;
 }
 export function storage() {
-  return { objects: new Map(), writes: 0, failWrites: 0, failLists: 0, beforeGet: null, beforePut: null, afterPut: null, beforeDelete: null,
+  return { objects: new Map(), writes: 0, failWrites: 0, failLists: 0, beforeGet: null, beforeHead: null, beforePut: null, afterPut: null, beforeDelete: null,
     async send(command) {
       const { Key, Body } = command.input;
       if (command instanceof ListObjectsV2Command) {
@@ -38,6 +39,11 @@ export function storage() {
         return { Contents: [...this.objects.keys()].filter(key => key.startsWith(command.input.Prefix || '')).map(Key => ({ Key })) };
       }
       const tag = key => this.objects.has(key) ? '"' + crypto.createHash('sha256').update(this.objects.get(key)).digest('hex') + '"' : undefined;
+      if (command instanceof HeadObjectCommand) {
+        await this.beforeHead?.(command.input);
+        if (!this.objects.has(Key)) throw Object.assign(new Error('Missing object'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } });
+        return { ETag: tag(Key) };
+      }
       if (command instanceof GetObjectCommand) {
         await this.beforeGet?.(command.input);
         if (!this.objects.has(Key)) throw Object.assign(new Error('Missing object'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } });

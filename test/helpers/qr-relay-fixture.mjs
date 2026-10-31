@@ -9,7 +9,7 @@ const candidate = await readFile(new URL('../../candidate/capturism-relay/server
 export const TOKEN = 'synthetic-token';
 export const PHOTO = `sessions/${TOKEN}/photo.jpg`;
 export const BODY = { token: TOKEN, photoKey: PHOTO };
-export function qrFunctions(source) {
+export function qrFunctions(source, { probeVideos = true } = {}) {
   const section = (start, end) => {
     const a = source.indexOf(start), b = source.indexOf(end, a);
     assert.ok(a >= 0 && b > a, start); return source.slice(a, b);
@@ -23,9 +23,9 @@ export function qrFunctions(source) {
     section('async function patchSession(', '/**\n * Look for a session') +
     section('async function handleGetDownload(', '/**\n * GET /api/proxy/:token/');
   const ws = section('    // booth:photos_ready — store token', '    // Persist session_complete');
-  return code + '\nasync function handleWsPhotosReady(msg, boothId) {\n' + ws + '\n}';
+  return code + (probeVideos ? section('async function probeForVideos(', 'async function handleGetDownload(') : '') + '\nasync function handleWsPhotosReady(msg, boothId) {\n' + ws + '\n}';
 }
-export function makeQrRelay(store, { code = candidate, boothId = 'synthetic-booth', now = Date.now, signR2Url = async key => 'http://127.0.0.1/synthetic-object/' + encodeURIComponent(key) } = {}) {
+export function makeQrRelay(store, { probeVideos = true, code = candidate, boothId = 'synthetic-booth', now = Date.now, signR2Url = async key => 'http://127.0.0.1/synthetic-object/' + encodeURIComponent(key) } = {}) {
   const cache = new Map(), notifications = [];
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now()])); } static now() { return now(); } }
   const context = { sessions: cache, SESSION_TTL_MS: 86400000, VIDEO_PENDING_GRACE_MS: 600000,
@@ -49,7 +49,7 @@ export function makeQrRelay(store, { code = candidate, boothId = 'synthetic-boot
     probeForVideos: async (_, session) => session,
     sessionMetadata: metadata.createSessionMetadataStore({ client: store, bucket: 'isolated-local-fixture', commands: storageCommands, cache, ttlMs: 86400000, now }),
   };
-  vm.createContext(context); vm.runInContext(qrFunctions(code), context);
+  vm.createContext(context); vm.runInContext(qrFunctions(code, { probeVideos }), context);
   return { ...context, cache, notifications,
     issue: (token = TOKEN, photoKey = PHOTO) => context.sessionMetadata.issue(token, { boothId, photoKey }, { fresh: true }),
     sign: body => new Promise((resolve, reject) => context.handleSignUpload({ body, fail: reject }, { resolve })),

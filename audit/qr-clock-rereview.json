@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-31",
+  "reviewedSnapshot": "7938e3e",
+  "productionImplementation": "d8dea047bfea8e4267a2708db3b249ca6df08306",
+  "patchSHA256": "75e0a3292d4a4c1e53b348bc23e851a6cec3a42b27e39cd51c8e8205283b8f5e",
+  "matchedCandidateFiles": 24,
+  "productionSourceChanged": false,
+  "twinTestsPassed": 146,
+  "targetedKioskTestsPassed": 27,
+  "positivePhoneTestsPassed": 15,
+  "unsafePhoneConsequenceProbes": 1,
+  "unsafeProviderScenarios": 3,
+  "positiveChecks": [
+    "full slow/idle/replay/withdrawal/restart suite",
+    "actual discovery: confirmed 404 and recovered video persistence",
+    "SIGKILL after metadata before clock and after clock before acknowledgement",
+    "kiosk TypeScript/full lint/build",
+    "phone TypeScript/component and helper lint/build",
+    "twin build",
+    "24-file exact isolated patch application and JavaScript syntax"
+  ],
+  "fixtureCorrections": [
+    "actual probeForVideos now runs by default, with local HEAD behavior",
+    "restart video bytes arrive after the waiting assertion, rather than pre-seeding an asset hidden by a stub"
+  ],
+  "openFindings": [
+    {
+      "id": "R8",
+      "severity": "medium",
+      "file": "candidate/capturism-relay/server.js",
+      "lines": [
+        775,
+        779,
+        795,
+        800
+      ],
+      "problem": "Unconfirmed video-discovery outcomes become final absence; phone stops polling and offers no retry.",
+      "scenarios": [
+        "transient HEAD 503 treated as absent video on warm and cold relays",
+        "failed discovery metadata save then immediate retry is suppressed by the throttle",
+        "concurrent reader skips successful in-flight discovery and receives videoFailed=true"
+      ],
+      "required": "Distinguish confirmed absence from unreadable/in-flight/failed-save state. Return retryable unknown state, avoid throttling failed work, and coordinate concurrent probes without false final failure."
+    }
+  ],
+  "existingFixesRemainLocallyValid": [
+    "R1-R5",
+    "R6 whole-read deadline and retry",
+    "R7 independent durable video clock",
+    "shared kiosk QR deadline"
+  ],
+  "releaseStatus": "HOLD for R8 plus existing kiosk/cloud/retention/backup/dependency/cutover gates",
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "browserActionsThisReview": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-clock-review-full-tests.txt",
+    "test-results/qr-clock-review-focused.txt",
+    "test-results/qr-clock-review-restart.txt",
+    "test-results/qr-clock-review-kiosk-tests.txt",
+    "test-results/qr-clock-review-phone-tests.txt",
+    "test-results/qr-clock-review-open-probe.json",
+    "test-results/qr-clock-review-artifact.json"
+  ]
+}

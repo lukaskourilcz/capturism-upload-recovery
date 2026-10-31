@@ -17,14 +17,24 @@ if (!fresh) {
 const original = store.send.bind(store);
 store.send = async command => {
   const result = await original(command);
-  if (command.constructor.name === 'PutObjectCommand') queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
+  if (command.constructor.name === 'PutObjectCommand') {
+    queue.atomicJSON(providerFile, [...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')]));
+    if (command.input.Key.startsWith('qr-video-wait/') && process.argv[5] === 'pause-ack') {
+      process.send({ phase: 'clock-durable' }); await new Promise(() => {});
+    }
+  }
   return result;
 };
 let base;
 const relay = makeQrRelay(store, { now: () => process.argv[4] ? Number(process.argv[4]) : Date.now(), signR2Url: async key => base + '/object?key=' + encodeURIComponent(key) });
 if (fresh) await relay.issue();
 let failMetadata = process.argv[3] === 'fail';
-store.beforePut = async ({ Key }) => { if (Key.endsWith('/meta.json') && failMetadata) { failMetadata = false; throw new Error('Metadata save failure'); } };
+store.beforePut = async ({ Key }) => {
+  if (Key.endsWith('/meta.json') && failMetadata) { failMetadata = false; throw new Error('Metadata save failure'); }
+  if (Key.startsWith('qr-video-wait/') && process.argv[5] === 'pause-clock') {
+    process.send({ phase: 'before-clock-write' }); await new Promise(() => {});
+  }
+};
 const server = http.createServer((req, res) => {
   if (req.url === '/confirm') return relay.handlePhotosReady(req, res);
   if (req.url.startsWith('/download/')) return void relay.handleGetDownload(req, res, req.url.split('/')[2]);

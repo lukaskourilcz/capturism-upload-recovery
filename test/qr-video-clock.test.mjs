@@ -109,7 +109,7 @@ test('clock persistence crossing expiry never creates usable metadata or acknowl
 test('video clock survives SIGKILL and cold video delivery without resetting retention', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'capturism-video-clock-')), file = join(dir, 'provider.json'); let child;
   const store = storage(), parent = makeQrRelay(store, { now: () => START }); await parent.issue();
-  const video = `sessions/${TOKEN}/layout.mp4`; store.objects.set(PHOTO, Buffer.alloc(32, 7)); store.objects.set(video, Buffer.alloc(16, 9));
+  const video = `sessions/${TOKEN}/layout.mp4`; store.objects.set(PHOTO, Buffer.alloc(32, 7));
   await writeFile(file, JSON.stringify([...store.objects].map(([key, bytes]) => [key, Buffer.from(bytes).toString('base64')])));
   const start = async clock => {
     child = fork(new URL('./fixtures/qr-relay-worker.mjs', import.meta.url), [file, 'normal', String(clock)], { env: { PATH: process.env.PATH }, stdio: ['ignore','pipe','pipe','ipc'] });
@@ -122,8 +122,13 @@ test('video clock survives SIGKILL and cold video delivery without resetting ret
     const original = new Map(JSON.parse(await readFile(file, 'utf8'))).get(WAIT); await stop();
     base = await start(START + 11 * MINUTE);
     const waiting = await (await fetch(base + '/download/' + TOKEN)).json(); assert.equal(waiting.videoPending, true);
-    assert.equal((await fetch(base + '/confirm', { method: 'POST', body: JSON.stringify({ ...pending, layoutVideoKey: video }) })).status, 200);
-    await stop(); base = await start(START + 12 * MINUTE);
+    assert.equal((await fetch(base + '/confirm', { method: 'POST', body: JSON.stringify(pending) })).status, 200);
+    await stop();
+    const uploaded = new Map(JSON.parse(await readFile(file, 'utf8')));
+    uploaded.set(video, Buffer.alloc(16, 9).toString('base64'));
+    await writeFile(file, JSON.stringify([...uploaded]));
+    base = await start(START + 12 * MINUTE);
+    // Real discovery recovers a video whose metadata acknowledgement was lost.
     const ready = await (await fetch(base + '/download/' + TOKEN)).json(); assert.equal(ready.videoPending, false);
     assert.equal(Date.parse(ready.expiresAt), START + 86400000);
     assert.deepEqual(Buffer.from(await (await fetch(ready.layoutVideoUrl)).arrayBuffer()), Buffer.alloc(16, 9));
