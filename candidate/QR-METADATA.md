@@ -1,6 +1,6 @@
 # Durable QR confirmation — local candidate
 
-Implementation `1d7ebac`, based on Capturism `1f2df64`. No deployment, push, credentials change, device operation or client message. This closes the local R3 reproduction; actual provider/kiosk checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md).
+Implementation `1d7ebac`, based on Capturism `1f2df64`. No deployment, push, credentials change, device operation or client message. This closes the local R3 reproduction; the 2026-10-31 re-review leaves R4/R5 open (see [audit](AUDIT.md)); actual provider/kiosk checks remain in the [rollout plan](ROLLOUT-ROLLBACK.md).
 
 ## Success boundary
 
@@ -10,7 +10,7 @@ For each confirmation, the writer takes a per-token lock and reads durable metad
 
 | Outcome | Response / recovery |
 | --- | --- |
-| Metadata cannot be saved/read or storage is unconfigured | HTTP 503; no success notification or new in-memory-only session |
+| Confirmation cannot save/read metadata or storage is unconfigured | HTTP 503; no success notification or new in-memory-only session |
 | Storage committed but its response was lost | 503 for the unknown outcome; retry reads the existing commit and can acknowledge it without another PUT |
 | Identical confirmation repeated | 200 from confirmed durable state; same photo/token, original clocks and existing media |
 | Two relays add different video fields | Conditional updates merge without replacing one another's completed fields |
@@ -23,7 +23,7 @@ HTTP notification/200, WebSocket notification and dev-seed success all follow th
 
 ## Replay and compatibility
 
-Replays retain `createdAt`, `expiresAt`, photo key, booth identity and saved video keys. Omitted optional fields cannot erase completed videos. Unknown historical metadata fields are retained. A pending-video flag does not renew the original video wait or session retention clocks. Expired stored sessions cannot be revived, and the client treats 410 as permanent instead of entering another automatic retry loop.
+Replays retain `createdAt`, `expiresAt`, photo key, booth identity and saved video keys. Omitted optional fields cannot erase completed videos. Unknown historical metadata fields are retained. A pending-video flag does not renew the original video wait or session retention clocks. When the original metadata is still stored, expired sessions return 410 and the client stops automatic retries. This protection does not survive metadata removal: a replay then creates a new expiry (open R4). A cold provider read error is also currently misreported as 404/expired (open R5).
 
 The existing client keeps its completed photo PUT checkpoint when confirmation gets 503 or times out. Automatic retry/manual recovery therefore retries confirmation with the same token and bytes, without another sign/PUT when already complete. It does not repeat printing or payment. QR recovery remains limited to the current browser page/session; it is not a new durable local QR queue. The independent pool queue is unchanged.
 
@@ -31,8 +31,8 @@ There is no multi-object transaction between photo PUT and metadata. A photo may
 
 ## Evidence
 
-- **112 twin tests and 27 targeted kiosk tests pass**; TypeScript, full lint, kiosk/twin production builds and JavaScript syntax checks pass. Existing build warnings remain. The regenerated patch applies exactly to the captured baseline and matches all 22 candidate files.
-- Twelve actual-relay-handler/service tests cover failed save, ambiguous provider response, replay after video delivery, concurrent relay updates, failed discovery writes, retention expiry including during save, identity conflict, missing/read-failing/corrupt storage, malformed requests, dev seed and WebSocket failure/success.
+- **115 twin tests and 27 targeted kiosk tests pass**; TypeScript, full lint, kiosk/twin production builds and JavaScript syntax checks pass. Existing build warnings remain. The regenerated patch applies exactly to the captured baseline and matches all 22 candidate files.
+- Fifteen targeted QR metadata tests cover failed save, ambiguous provider response, replay after video delivery, concurrent relay updates, failed discovery writes, retention expiry including during save, identity conflict, missing/read-failing/corrupt storage, malformed requests, dev seed and WebSocket failure/success.
 - A real client over local HTTP gets 503 then 200 with one sign and one photo PUT. Tests include save failure, lost provider acknowledgement and deadline-then-explicit-recovery. Its QR checkpoint stays available until confirmation succeeds.
 - A real relay-handler child process acknowledges a successful save, is killed with SIGKILL, and a new process reloads an isolated disk-backed provider replacement. The recovered download returns 200 and serves the original photo bytes. This is process-restart evidence on this Mac, not physical Windows power-loss or live R2 proof.
 - The twin now uses the production metadata writer. The after-idle save preset fails the metadata write itself; local QR cache restart preserves external provider state. All five QR idle-failure cases also verify download metadata after a cache restart.
@@ -40,3 +40,5 @@ There is no multi-object transaction between photo PUT and metadata. A photo may
 `node audit/reproduce-qr-persistence.mjs` now compares the unsafe baseline with the fixed candidate. Baseline returns 200 on the injected save failure and loses the download after restart. Candidate returns 503 with zero new success-cache entries/notifications; retry saves, returns 200 and resolves after restart. Historical failing-review evidence is retained separately.
 
 Current local evidence: `test-results/qr-metadata-before-after.json`, `qr-metadata-focused.txt`, `qr-metadata-relay-checks.txt`, `qr-durability-full-tests.txt`, `qr-durability-kiosk-tests.txt`, `qr-durability-artifact.json`. The [audit](AUDIT.md) records remaining environment, dependency and cutover gates. Nothing is deployed.
+
+Re-review evidence: `test-results/qr-rereview-open-findings.json` reproduces R4/R5; it is not a passing safety assertion. The process fixture now seeds its synthetic photo only on first provider creation, so a restart cannot manufacture missing photo bytes. Corrected restart and negative-control tests pass. Deployment remains on hold.

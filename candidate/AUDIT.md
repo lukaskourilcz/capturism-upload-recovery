@@ -1,8 +1,8 @@
-# Combined patch audit — local blockers resolved; rollout still gated
+# Combined patch audit — HOLD: expiry replay and cold-read recovery findings
 
 Reviewed against Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Tested implementation: local twin commit `1d7ebac0ea112b473e97f5cf7b91e599e32f6593`, retaining earlier pool-v2 and QR deadline work. Combined patch SHA-256: `dccf9d1f5bffd5e76ad499c7534bafabc81da70d17929ccf311d374d4e667f51`.
 
-**R1/R2 pool findings, the client QR deadline finding and R3 metadata durability are resolved in the local candidate. This is not deployment approval.** Real Windows/kiosk, provider, hosting, dependency and controlled-cutover checks remain. Existing pool write capabilities must be retired before enabling v2. No production credentials, deployment, push, device/payment/print operation or client message was used.
+**Re-review on 2026-10-31: two open findings, R4 (high) and R5 (medium), prevent declaring the QR flow ready.** Earlier pool, client deadline and R3 durable-acknowledgement fixes remain valid in their tested scope. The current production patch is unchanged by this re-review. No deployment, push, provider/device/payment/print action, credential access or client message was performed.
 
 ## R1 — High: withdrawn entry recreated by replay — resolved locally
 
@@ -46,6 +46,26 @@ Before/after evidence: `test-results/qr-metadata-before-after.json`. Baseline: 2
 
 The twin now uses the same metadata writer for QR confirmation and an actual metadata-write fault in `qr_idle_save`; cache-only relay restart is modeled separately from bridge restart. Its API/storage/auth remain substitutes; actual server functions are exercised by the new fixtures. See [QR metadata contract](QR-METADATA.md).
 
+## R4 — High: replay renews an expired QR after metadata removal — OPEN
+
+The expiry guard reads `old.expiresAt` from `sessions/<token>/meta.json`. If that object has been removed by lifecycle cleanup or a restore operation, `read()` returns null and `change()` treats the same token as a new session: `createdAt = now()` and a fresh 24-hour expiry. A conditional create prevents simultaneous duplicate objects but does not distinguish a genuinely new token from an expired replay.
+
+Local actual-handler reproduction: create/confirm → advance beyond original expiry → replay returns 410 while metadata remains → remove only metadata → restart relay context → replay returns 200, a new expiry is written and the old token resolves again while its photo remains. Expiry extended by 86,400,001 ms in the fixture. This is a demonstrated remaining code gap; actual bucket cleanup timing/configuration was not inspected. If the photo was also removed, the same mechanism can acknowledge newly created metadata for an unavailable asset.
+
+Callers include delayed video delivery: its 24-hour age is measured from local enqueue and checked before upload, rather than from the QR's original metadata expiry. An attempt may cross the session expiry while it is working. Do not assume the queue's age check prevents a late confirmation or that lifecycle deletes all objects atomically.
+
+Location: `session-metadata.cjs`, `read` missing-object branch and `change` new-record initialization. Required before release: authoritative original token/expiry evidence that survives metadata cleanup (or an equivalent validated issuance protocol), fail closed for uncertain old identities, and tests for both retained and removed metadata. Preserve first-confirmation recovery, legacy compatibility, original expiry and video history; an in-memory-only guard is insufficient. This review does not implement a partial expiry protocol redesign.
+
+## R5 — Medium: a cold relay maps storage unavailability to “expired” — OPEN
+
+`loadSession` catches every metadata load error and returns null. `handleGetDownload` maps null to HTTP 404. With a valid durable session, a warm-cache relay can return 200 during a provider read outage; a fresh relay returns 404 for the same token. Once the injected provider read failure is removed, the same fresh relay returns 200 without changing metadata. This is inherited read-path behavior, not a new write-durability failure.
+
+The unchanged download page maps 404 to “This link has expired or is invalid” and enters an error state. Its polling is scheduled after successful responses only, so it does not automatically recover from this first failed load. A customer can see a false expiry after restart despite intact persisted data.
+
+Location: `server.js`, `loadSession` catch and the missing-session branches of download/asset proxy; `capturism-download/src/components/DownloadPage.tsx` in the captured baseline. Required resolution: distinguish confirmed missing/expired from transient read/unconfigured/corrupt-storage failures, return a retryable status for the latter, and provide bounded or explicit phone-page recovery. Review all load callers and test them without invoking subscription/report/message workflows.
+
+Evidence for both open findings: `node audit/reproduce-qr-expiry-recovery.mjs`, saved as `test-results/qr-rereview-open-findings.json`. Its successful exit means unsafe behavior was reproduced. It is deliberately separate from passing regression tests; those passing tests do not assert R4/R5 are safe.
+
 ## Earlier audit fixes retained
 
 | Finding | Fix and local evidence |
@@ -57,9 +77,9 @@ The twin now uses the same metadata writer for QR confirmation and an actual met
 
 ## Final local validation
 
-The previous combined review (`190e32e`) identified R3; implementation `1d7ebac` closes it and is the current artifact. Existing browser evidence remains historical; this change was verified through actual handlers, local HTTP, persisted provider fixtures and child-process restart.
+Re-reviewed combined snapshot `da37ad8`, implementation `1d7ebac`, on 2026-10-31. Production files/hash are unchanged. New review tests cover exact expiry and stale-cache replay; the restart fixture was corrected to seed photos only for new provider storage, with a negative missing-photo control.
 
-- **112 twin tests passed**, zero failures/skips, approximately 35.7 seconds; **27 targeted kiosk tests passed** across uploader/probe/privacy/video and recovery UI. New tests cover metadata failure/replay/retention/concurrency and actual client recovery plus relay process death. Kiosk jsdom tests on Node 26 use `NODE_OPTIONS=--no-experimental-webstorage`. All prior pool/QR/video checks remain green.
+- **115 twin tests passed**, zero failures/skips; **27 targeted kiosk tests passed**. The acknowledged-photo SIGKILL/restart test still passes with fixture reseeding removed. Exact-expiry warm/cold checks and stale warm relay reconciliation pass. R4/R5's separate unsafe reproductions remain open; a green suite is not release approval. Kiosk tests use Node 26 with `NODE_OPTIONS=--no-experimental-webstorage`.
 - Earlier protocol-2 Chrome check (`8f738df`): local acceptance → protected pool publication at 16.4 seconds → done receipt at 16.5 seconds; QR at 1.6 seconds. Bridge restarted at 25.4 seconds; read-only state still showed one entry, one publication event and the same done receipt. Synthetic data, healthy local link; not a studio benchmark. Evidence: `test-results/browser-publication-v2.json` and `test-results/publication-v2-browser.png`.
 - Final kiosk overlay passed `tsc -b`, full lint with zero warnings and production Vite build. Twin build and all candidate JavaScript syntax checks passed. Build retains existing large-chunk/mixed-import warnings (main JavaScript about 1.403 MB before gzip) and a Node loader deprecation warning.
 - The exact `local-fix.patch` applied in a fresh temporary directory reproduces all **22 changed candidate files byte-for-byte**, in addition to `git apply --check` against the captured baseline. No production dependencies or lockfiles changed. The actual HTTP router/authentication boundary was exercised locally with a stub pool handler; full relay startup and real provider behavior were not executed; actual pool handlers use injected local S3/quiz replacements with commit-time ETag conditions. Queue tests also use a disk-backed local substitute.
@@ -68,7 +88,7 @@ The previous combined review (`190e32e`) identified R3; implementation `1d7ebac`
 
 ## Remaining issues and release gates
 
-**R3 is closed locally; real provider persistence still needs staging evidence.** Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
+**R4/R5 need code/recovery resolution before release.** They are demonstrated gaps, not merely unspecified environment checks. R3 remains closed locally; real provider persistence still needs staging evidence. Verify actual SDK/IAM/conditional-write behavior, save failure and acknowledged-download recovery after a real relay restart using synthetic data. All QR metadata writers must use the new helper; do not mix an old relay writer with the new layer.
 
 **Launcher/update automation must be controlled.** `start-kiosk.bat` and `update-kiosk-auto.bat` switch a non-main/detached checkout to `main`, may stash tracked edits and pull again. A rollback to a detached SHA followed by the stock launcher is therefore not a pin. The revised rollout plan requires verified `main`/artifact alignment or an approved maintenance launcher, plus frozen automatic updates/restarts. Never run these launchers on this Mac as a rehearsal; they are Windows device/process operations.
 
@@ -78,6 +98,6 @@ Image deletion and metadata publication are not an atomic multi-object transacti
 
 The bridge queue remains single-writer, with durability beginning after local acknowledgement. Do not launch another worker against its folder, clear receipts, re-identify jobs or restore stale backups. Page closure before JPEG handoff, catastrophic disk failure and physical Windows power loss remain outside demonstrated durability. Corrupt/blocked/older-than-24h jobs retain bytes for review; no consent is renewed automatically.
 
-Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. These environment and cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
+Actual kiosk SHA, Node/Chrome/Windows/filesystem, tunnel rewrites, R2 conditional permissions/lifecycle/key rotation, Render request limits/topology and real after-idle behavior remain unverified. Baseline critical/high advisories need disposition. The new relay hop is bounded to two concurrent 20 MiB bodies, but real slow-network hosting behavior still needs staging. R4/R5 and the environment/cutover gates keep production release on hold; the passing client-deadline and pool publication checks remain valid within their tested scope.
 
 See the [final combined review](FINAL-REVIEW.md), [protocol and failure boundaries](PUBLICATION-FENCING.md), [coverage ledger](AUDIT-COVERAGE.md) and [rollout/rollback plan](ROLLOUT-ROLLBACK.md).
