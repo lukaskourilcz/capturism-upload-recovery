@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-31",
+  "reviewedSnapshot": "d42e15f",
+  "implementationCommit": "001032ea0f1c98ff61a7e157c04ee5e9b3e32b62",
+  "patchSHA256": "9675fb069a72ba1640e266becb4b917ef537e39acd2fbe1ba7c2ac60b313dcad",
+  "candidateFilesMatched": 24,
+  "productionSourceChanged": false,
+  "twinTestsPassed": 169,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "newPositiveChecks": [
+    "different relay commit during all-missing HEAD scan",
+    "conflicting media key commit preserved and retry reconciles",
+    "50 warm readers: one discovery and one save",
+    "50 cold readers: one discovery and one save",
+    "SIGKILL after verified absence: fresh request discovers subsequently arrived video"
+  ],
+  "burstOperationCounts": {
+    "warm": {
+      "readers": 50,
+      "GetObject": 6,
+      "HeadObject": 5,
+      "PutObject": 1
+    },
+    "cold": {
+      "readers": 50,
+      "GetObject": 156,
+      "HeadObject": 5,
+      "PutObject": 1
+    },
+    "limitation": "Initial cold metadata hydration is not coalesced; actual hosting latency/admission/SDK limits remain a staging gate."
+  },
+  "checks": "kiosk typecheck/full lint/build, phone typecheck/build/component+helper lint, twin build, exact artifact and JavaScript syntax passed",
+  "openFindings": [
+    {
+      "id": "R9",
+      "severity": "high",
+      "location": "candidate/capturism-relay/session-metadata.cjs:125; candidate/capturism-relay/server.js:963-976",
+      "problem": "Authenticated booth can attach unrelated bucket keys as QR video/layout/story media, exposing their bytes through public signing/proxy.",
+      "preconditions": [
+        "valid booth authorization to issue/confirm its own QR",
+        "known or guessable target object key readable by relay storage credentials"
+      ],
+      "localEvidence": "six synthetic cases (baseline and candidate, three media fields): own photo issuance and confirmation 200; public proxy private bytes 200 warm and cold",
+      "required": "Validate session/booth ownership and allowed media namespace/type for new keys; guard public signing/proxy against unsafe stored mappings; preserve only explicitly trusted legacy asset mappings and test all write/read callers.",
+      "notClaimed": [
+        "unauthenticated mapping creation",
+        "bucket enumeration",
+        "live exploitation",
+        "real customer data access"
+      ]
+    }
+  ],
+  "releaseStatus": "HOLD for R9 and existing kiosk/cloud/paired-retention/backup/dependency/cutover gates",
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "browserActionsThisReview": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-discovery-rereview-focused.txt",
+    "test-results/qr-discovery-rereview-full-tests.txt",
+    "test-results/qr-discovery-rereview-kiosk-tests.txt",
+    "test-results/qr-discovery-rereview-phone-tests.txt",
+    "test-results/qr-discovery-rereview-artifact.json",
+    "test-results/qr-final-rereview-open-media-scope.json"
+  ]
+}
