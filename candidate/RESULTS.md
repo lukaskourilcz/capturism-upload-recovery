@@ -2,7 +2,7 @@
 
 Baseline: Capturism commit `1f2df6401997455b456eab9b32d258b997dc4b9d`. No production changes, remote pushes or client messages.
 
-This document records the initial QR experiment. Current [audit](AUDIT.md): 193 twin tests, 27 kiosk tests and 16 phone tests pass. Production implementation `baf29cb` and its 26-file patch are unchanged. R9 authorization remains locally valid, but the [latest re-review](FINAL-REVIEW.md) demonstrates OPEN R10: photo-only replay after missing metadata can lose an approved legacy video reference and report false failure after restart. Full-field restore and seven additional approval/recovery checks pass. The [plan](ROLLOUT-ROLLBACK.md) holds release for R10 and kiosk/cloud/legacy ownership/backup/load/dependency/cutover gates. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
+This document records the initial QR experiment. Current [audit](AUDIT.md): 211 twin tests, 27 kiosk tests and 16 phone tests pass. Implementation `4a74967` resolves R10 locally: photo-only recovery restores independently approved legacy videos after metadata loss and preserves original clocks. Replay, revocation, failed/lost saves, simultaneous writers and process-kill recovery pass. The [plan](ROLLOUT-ROLLBACK.md) still requires actual kiosk/cloud/private legacy/backup/load/dependency/cutover checks. Nothing is deployed or sent. Historical timer descriptions and the 16-test count below describe an earlier candidate.
 
 ## Reproduction
 

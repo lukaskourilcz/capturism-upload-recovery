@@ -1,0 +1,144 @@
+{
+  "date": "2026-10-31",
+  "implementationCommit": "4a749676c6af55133f907b54822235e6ffa5e2d9",
+  "baseline": "1f2df6401997455b456eab9b32d258b997dc4b9d",
+  "patchSHA256": "09ef5958dcd77254e0cfec696e6a82ac643c489c63848d552332dd77a319bb77",
+  "candidateFilesMatched": 26,
+  "twinTestsPassed": 211,
+  "targetedKioskTestsPassed": 27,
+  "phoneTestsPassed": 16,
+  "dedicatedR10Regressions": 18,
+  "focusedR10PlusPriorReviewTestsPassed": 25,
+  "closedLocally": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "R10",
+    "kiosk deadline"
+  ],
+  "reconstruction": {
+    "authority": "Existing live immutable expiry proof and authenticated original photo identity before optional approval read",
+    "assets": "Only exact video/layout/story keys from independently reviewed manifest bound to token, identity and original dates",
+    "conflicts": "409 without replacing approved media",
+    "confirmedMissingApproval": "No legacy assets restored; independently authorized canonical photo can still recover; noncanonical references remain denied",
+    "badScope": "403 including JSON null, wrong token/identity/dates and private namespaces",
+    "readFailure": "503 retryable before saving; no success cache/notice",
+    "postSaveCheck": "Recheck authorization after durable metadata/clock work, before acknowledgement; revocation withholds success, public reads remain guarded",
+    "clocks": "Original proof/wait/approval bytes and all media unchanged; no new token or renewed expiry",
+    "duplicates": "One complete conditional mapping under competing replays; zero extra writes on acknowledged/lost-ACK replay",
+    "scopeLimit": "Only missing metadata is hydrated; existing truncated records and missing history/wait evidence require private reconciliation; approval alone cannot establish issuance"
+  },
+  "before": {
+    "finding": "R10",
+    "status": "OPEN",
+    "severity": "medium",
+    "interpretation": "Photo-only metadata reconstruction loses an approved noncanonical legacy video; presence/approval/bytes remain intact but public discovery checks only the current token prefix. This is a local synthetic reproduction, not a live incident.",
+    "before": {
+      "downloadStatus": 200,
+      "hasLegacyVideo": true
+    },
+    "after": {
+      "confirmationStatus": 200,
+      "downloadStatus": 200,
+      "hasLegacyVideo": false,
+      "videoFailed": true
+    },
+    "restart": {
+      "downloadStatus": 200,
+      "hasLegacyVideo": false,
+      "videoFailed": true
+    },
+    "originalVideoBytesAndApprovalPreserved": true,
+    "originalClocksPreserved": true,
+    "metadataLostLegacyReference": true,
+    "privateStorageExposure": false,
+    "cloudAccess": false
+  },
+  "after": {
+    "finding": "R10",
+    "status": "resolved locally",
+    "severity": "medium",
+    "interpretation": "Photo-only reconstruction recovers the exact approved legacy video, original clocks and bytes; replay and cold restart retain the mapping. Synthetic local provider only, no cloud action.",
+    "before": {
+      "downloadStatus": 200,
+      "hasLegacyVideo": true
+    },
+    "after": {
+      "confirmationStatus": 200,
+      "downloadStatus": 200,
+      "hasLegacyVideo": true,
+      "videoFailed": false
+    },
+    "restart": {
+      "downloadStatus": 200,
+      "hasLegacyVideo": true,
+      "videoFailed": false
+    },
+    "originalVideoBytesAndApprovalPreserved": true,
+    "originalClocksPreserved": true,
+    "metadataLostLegacyReference": false,
+    "replayAdditionalWrites": 0,
+    "privateStorageExposure": false,
+    "cloudAccess": false
+  },
+  "approvalOperationCounts": {
+    "canonicalFirstConfirmationApprovalGETs": 1,
+    "canonicalReplayApprovalGETs": 0,
+    "approvedLegacyReconstructionApprovalGETs": 3,
+    "approvedLegacyReplayApprovalGETs": 3,
+    "approvedLegacyWarmPublicReadApprovalGETs": 2,
+    "approvedLegacyColdPublicReadApprovalGETs": 3,
+    "interpretation": "Measured against isolated provider; no live latency or cost claim"
+  },
+  "restartCases": [
+    "failed metadata save then SIGKILL; fresh process reconstructs all approved videos and serves original bytes; later revocation remains denied after another restart",
+    "SIGKILL after complete metadata persistence but before confirmation acknowledgement; fresh process reuses the committed bytes with no extra write"
+  ],
+  "checks": {
+    "twin": "passed",
+    "kioskTypeScriptFullLintBuild": "passed",
+    "phoneTypeScriptComponentHelperLintBuild": "passed",
+    "twinBuild": "passed",
+    "JavaScriptSyntaxAndByteExactArtifact": "passed",
+    "kioskPhoneValidatedOverlayBytes": "14 candidate files match",
+    "existingPoolWithdrawalDuplicatesDurableQueueQRExpiryClockDiscoveryAuthorization": "passed"
+  },
+  "remainingGates": [
+    "actual SDK/R2 conditional/abort/private-prefix Get/ETag behavior and representative confirmation load",
+    "current legacy source ownership/retention decisions and revocation-aware backup/restore; existing truncated-record inventory",
+    "full relay integrations in isolated staging with real notification/report effects disabled",
+    "Windows running SHA, launcher/update control, queue/disk/hardware and studio idle evidence",
+    "Pages/Render environment, existing read/write capability and cache cutover, compatible rollback retaining R10/R9/clocks/fences",
+    "baseline dependency reachability/upgrade disposition",
+    "exact release artifact and explicit authorization"
+  ],
+  "releaseStatus": "Local R10/A13 passed; no release performed; environment/private legacy gates remain",
+  "deployment": false,
+  "push": false,
+  "clientMessages": false,
+  "liveProviderAccess": false,
+  "browserActions": false,
+  "newDependencies": false,
+  "evidence": [
+    "test-results/qr-legacy-before-tests.txt",
+    "test-results/qr-legacy-before.json",
+    "test-results/qr-legacy-after.json",
+    "test-results/qr-legacy-focused.txt",
+    "test-results/qr-legacy-full-tests.txt",
+    "test-results/qr-legacy-kiosk-tests.txt",
+    "test-results/qr-legacy-phone-tests.txt",
+    "test-results/qr-legacy-artifact.json",
+    "test-results/qr-legacy-approval-counts.json",
+    "test-results/qr-legacy-authorization.json",
+    "test-results/qr-legacy-persistence.json",
+    "test-results/qr-legacy-expiry.json",
+    "test-results/qr-legacy-grace.json"
+  ],
+  "historicalReview": "audit/qr-media-final-rereview.json records the original OPEN R10 and is superseded for current status by this validation"
+}
