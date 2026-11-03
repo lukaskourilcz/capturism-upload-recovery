@@ -1,0 +1,53 @@
+{
+  "sourceSha256": "06f78969b470eac61aa8e195ceb0d3fff8c4992298e79d9f3eea1eefb74c9398",
+  "method": "read-only source inventory; shared hooks and other token writers require manual review",
+  "products": [
+    {
+      "component": "PhotoPrinting",
+      "line": 880,
+      "rendersQr": true,
+      "uploadCalls": 1,
+      "tokenSetterCalls": 1,
+      "awaitsCompositionBeforeUpload": true
+    },
+    {
+      "component": "CalendarPrinting",
+      "line": 505,
+      "rendersQr": true,
+      "uploadCalls": 1,
+      "tokenSetterCalls": 1,
+      "awaitsCompositionBeforeUpload": true
+    },
+    {
+      "component": "PostcardPrinting",
+      "line": 1244,
+      "rendersQr": true,
+      "uploadCalls": 0,
+      "tokenSetterCalls": 0,
+      "awaitsCompositionBeforeUpload": false
+    },
+    {
+      "component": "PhotoIdPrinting",
+      "line": 1521,
+      "rendersQr": true,
+      "uploadCalls": 1,
+      "tokenSetterCalls": 1,
+      "awaitsCompositionBeforeUpload": false
+    },
+    {
+      "component": "LostConnectionPrinting",
+      "line": 1931,
+      "rendersQr": true,
+      "uploadCalls": 1,
+      "tokenSetterCalls": 1,
+      "awaitsCompositionBeforeUpload": true
+    }
+  ],
+  "findings": [
+    {
+      "component": "PostcardPrinting",
+      "status": "open",
+      "issue": "QR display without a product-local upload call"
+    }
+  ]
+}
