@@ -2,12 +2,16 @@
 
 A local diagnostic replica of the studio's **photo → upload → confirmation → QR → download** path. It is an upload lab, not a complete Windows kiosk or an exact reproduction of the October incident.
 
+**Current status, 3 November 2026:** [Claire's follow-up analysis](candidate/FOLLOWUP-2026-11-03.md) identifies an open postcard QR caller gap (R12) in both the baseline and the current candidate. Earlier R1–R11 fixes remain locally tested within their scope; the candidate is not release-ready. Optional video preparation also needs bounded waits and original-file profiling. See the updated [audit](candidate/AUDIT.md) and [release gates](candidate/ROLLOUT-ROLLBACK.md).
+
+This private repository preserves the original local commit history, candidate patch, synthetic twin and review evidence. It is an analysis/fix handoff, not the complete upstream application or a studio deployment. [Handoff instructions](HANDOFF.md) explain the source baseline and checks still needed. Real customer media, credentials, runtime queues and logs are not included.
+
 ## Run
 
 Requires Node 22+ and npm. Verified here with Node 26.8.2 and Chrome.
 
 ```sh
-cd /Users/lukasbarsinbars/Documents/ChatGPT/capturism/digital-twin
+cd <your-checkout>
 npm ci --ignore-scripts
 npm run dev
 ```
@@ -53,7 +57,7 @@ Save the timeline, config, queue and session metadata with **Save test report** 
 
 - Loopback-only listener; fixed local worker destination; no production keys or `.env` loading.
 - Browser CSP and fetch guard block external service calls; cross-origin control requests are rejected.
-- Independent local Git repository with no remote. Nothing is pushed or deployed.
+- Independent twin repository backed up privately at [lukaskourilcz/capturism-upload-recovery](https://github.com/lukaskourilcz/capturism-upload-recovery). Publishing this history does not install or deploy the candidate.
 - No printer, payment terminal, camera, customer messaging, or live bucket access.
 
 ## Calibration still needed
