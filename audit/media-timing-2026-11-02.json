@@ -1,0 +1,31 @@
+{
+  "scope": "WhatsApp-delivered copies; recompression and variable frame rate prevent attribution to the original kiosk encoder",
+  "samples": [
+    {
+      "sample": 1,
+      "bytes": 707138,
+      "durationSeconds": 5.03,
+      "codec": "h264",
+      "width": 480,
+      "height": 848,
+      "decodedFrames": 80,
+      "averageFramesPerSecond": 15.9,
+      "medianFrameIntervalMs": 45,
+      "longestFrameIntervalMs": 908.33,
+      "gapsAbove200Ms": 1
+    },
+    {
+      "sample": 2,
+      "bytes": 61673,
+      "durationSeconds": 2.393333,
+      "codec": "h264",
+      "width": 480,
+      "height": 848,
+      "decodedFrames": 25,
+      "averageFramesPerSecond": 10.45,
+      "medianFrameIntervalMs": 58.33,
+      "longestFrameIntervalMs": 1033.33,
+      "gapsAbove200Ms": 2
+    }
+  ]
+}
