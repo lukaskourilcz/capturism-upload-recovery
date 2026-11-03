@@ -1,4 +1,6 @@
-# Combined patch audit — local stale-cache recovery fix; environment gates remain
+# Combined patch audit — postcard upload blocker and environment gates remain
+
+**2026-11-03 update: R12 is OPEN (High).** The baseline and current candidate postcard printing component render a QR placeholder but never start the photo upload or set its token. Shared print/thank-you logic supplies no fallback. This matches Claire's new product-specific report, subject to verification of her running build. The prior R1–R11 tests did not cover this complete product path. See [follow-up evidence and proposed fixes](FOLLOWUP-2026-11-03.md) and `audit/product-upload-coverage.json`. The existing 26-file production patch is unchanged and is not release-ready. Optional video preparation also precedes photo upload and contains unbounded media-event waits; its contribution to the studio incident remains unverified. No new production fix or deployment was made in this analysis.
 
 Reviewed against Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Tested implementation `8d0f2651b554c8247a943f65e5c1a43f9ed6f241`. Production patch SHA-256 `92e61b8656d1dead978514db0e0ddea10e7839f301b6f7cbaeb7ad70d5e23659`; 26 changed files.
 

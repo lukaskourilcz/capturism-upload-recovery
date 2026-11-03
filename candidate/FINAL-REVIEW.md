@@ -1,4 +1,6 @@
-# Final combined verification — stale-cache recovery fixed locally
+# Combined verification — R12 postcard caller remains open
+
+**Current status, 2026-11-03:** R1–R11 remain locally resolved within their previous scope, but R12 is open in the unchanged candidate: postcard QR rendering has no upload/token-producing caller. The earlier full-path coverage claim was incomplete for this product. [New follow-up analysis](FOLLOWUP-2026-11-03.md) documents source evidence, read-only inventory, media timing, proposed fixes and the still-required running-version/log checks. The checks and counts below describe the 31 October artifact, not newly executed tests or a postcard fix. Release remains blocked by R12 and environment gates.
 
 2026-10-31. Tested implementation `8d0f2651b554c8247a943f65e5c1a43f9ed6f241`, based on Capturism `1f2df6401997455b456eab9b32d258b997dc4b9d`. Production patch SHA-256 `92e61b8656d1dead978514db0e0ddea10e7839f301b6f7cbaeb7ad70d5e23659`; 26 changed files. This includes R9/R10 authorization/reconstruction and R11 denied-cache recovery, retaining the prior pool/QR fixes. No deployment, push, credentials, cloud/device/payment/print action or client message.
 

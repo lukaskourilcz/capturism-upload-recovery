@@ -1,4 +1,14 @@
-# Rollout and rollback plan — local cache recovery fix; environment gates remain
+# Rollout and rollback plan — open postcard blocker; environment gates remain
+
+**2026-11-03 release hold:** R12 is open in the existing 26-file patch: postcard renders a QR placeholder without initiating its photo upload. [Follow-up evidence](FOLLOWUP-2026-11-03.md) also separates optional-video preparation from network waiting. A15 below is required in addition to A1–A14 and the existing environment gates. This analysis does not authorize a deployment; pushing the isolated private twin repository does not install the patch on any live service.
+
+## A15 — Product delivery and bounded preparation — OPEN
+
+Before release, implement the missing postcard digital-delivery caller, then test each product's actual print-to-thank-you-to-QR route with simulated printer/payment/storage boundaries. Include healthy postcard, slow/failed upload, same-photo retry, StrictMode, printing-screen unmount, actual reset/new customer and no-QR choice. QR retry must cause zero new printing or payment actions. Assert correct landscape digital orientation independently of printer rotation, current ownership and one token/session. The source inventory in `audit/product-upload-coverage.json` is evidence of an open gap, not an end-to-end pass.
+
+Measure and bound optional video load/seek/play/record/stop preparation. Prefer ready photo/QR independently of optional video composition, preserving intended media state and the existing persistent video wait/expiry clocks. Test missing/already-fired events, same-position seek, CPU pressure and suspended/resumed tabs without cross-customer results. Original media, running SHA and failed/successful session logs remain required to attribute the studio delay. Re-run the prior combined regression/build/artifact checks after any implementation change; update the patch hash and reviewed implementation then.
+
+If postcard delivery or preparation fails during a future authorized rollout, stop that rollout and preserve logs and original media/queue state. Prefer a compatible forward fix. Reverting the new postcard caller would knowingly restore missing digital delivery and must not be presented as a healthy rollback; a supported product-level disable/maintenance option requires explicit operational review. Preserve R1–R11 queue, withdrawal, authorization and clock protections. Do not retry a print/payment to recover a download.
 
 **2026-10-31: R11 resolved locally in `8d0f265`.** Denied legacy snapshots reload the valid current photo record; revoked videos stay blocked. Initial/final public guards retain original identity/clocks and use only resolved keys. Read failures offer retry; warm/fresh, concurrent and actual warm-child restart cases pass. A14 is locally passed; real SDK/kiosk/cloud/private legacy/backup/dependency/cutover gates remain. No deployment, push, cloud migration or client message.
 
